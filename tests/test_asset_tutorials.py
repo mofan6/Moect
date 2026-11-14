@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from core.service import Service
+from core.version import TUTORIAL_REVISION
 from tests.test_resources import ASSETS
 
 
@@ -52,12 +53,38 @@ class AssetTutorialTests(unittest.TestCase):
 
     def test_malformed_saved_flags_recover_without_assuming_truthy_values_are_seen(self):
         state=self.root/'separate';state.mkdir()
-        (state/'config.json').write_text(json.dumps({'asset_tutorials':{'moments':'false','stickers':True}}))
+        (state/'config.json').write_text(json.dumps({'tutorials_seen':{'moments':True,'stickers':TUTORIAL_REVISION}}))
         reloaded=Service(ASSETS,state)
         try:
             self.assertFalse(reloaded.call('tutorial_status',{'kind':'moments'})['seen'])
             self.assertTrue(reloaded.call('tutorial_status',{'kind':'stickers'})['seen'])
         finally:reloaded.shutdown()
+
+    def test_upgrade_from_legacy_or_older_revision_shows_all_new_tutorials_once(self):
+        legacy={'app_onboarding_seen':True,'asset_tutorials':{'moments':True,'stickers':True}}
+        for index,flags in enumerate((legacy,{'tutorials_seen':dict.fromkeys(('app','moments','stickers'),'1.2.8')})):
+            state=self.root/str(index);state.mkdir()
+            (state/'config.json').write_text(json.dumps({**flags,'theme':'dark','accent':'rose','export_dir':'Synthetic exports','tasks':[]}))
+            upgraded=Service(ASSETS,state)
+            try:
+                for kind in ('app','moments','stickers'):
+                    self.assertFalse(upgraded.call('tutorial_status',{'kind':kind})['seen'])
+                self.assertFalse(upgraded._startup_reconnect_allowed)
+                upgraded.call('tutorial_seen',{'kind':'app'})
+                self.assertFalse(upgraded._startup_reconnect_allowed)
+                self.assertFalse(upgraded.call('tutorial_status',{'kind':'moments'})['seen'])
+                for kind in ('moments','stickers'):upgraded.call('tutorial_seen',{'kind':kind})
+                saved=json.loads((state/'config.json').read_text(encoding='utf-8'))
+                self.assertEqual(saved['tutorials_seen'],{**dict.fromkeys(('app','moments','stickers'),TUTORIAL_REVISION),'favorites':''})
+                self.assertNotIn('app_onboarding_seen',saved);self.assertNotIn('asset_tutorials',saved)
+                self.assertEqual((saved['theme'],saved['accent'],saved['export_dir']),('dark','rose','Synthetic exports'))
+            finally:upgraded.shutdown()
+            restarted=Service(ASSETS,state)
+            try:
+                for kind in ('app','moments','stickers'):
+                    self.assertTrue(restarted.call('tutorial_status',{'kind':kind})['seen'])
+                self.assertTrue(restarted._startup_reconnect_allowed)
+            finally:restarted.shutdown()
 
 
 if __name__=='__main__':unittest.main()

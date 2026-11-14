@@ -22,6 +22,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from decimal import Decimal,InvalidOperation
+from .game_emojis import describe_game
 
 try:
     import zstandard as zstd
@@ -267,6 +268,7 @@ class Wx4Data:
         self._tables: dict[int, set] = {}
         self.contacts: dict[str, dict] = {}
         self.room_members: dict[str, list[str]] = {}
+        self.rooms: dict[str, dict] = {}
         self.me: dict = {}
         self.msg_dbs: list[sqlite3.Connection] = []
         self.media_dbs: list[sqlite3.Connection] = []
@@ -398,8 +400,13 @@ class Wx4Data:
         if con is None:
             return
         try:
-            room_ids = {r["id"]: r["username"]
-                        for r in con.execute("select id,username from chat_room")}
+            room_ids = {}
+            for row in con.execute('SELECT * FROM chat_room'):
+                room = dict(row)
+                username = room.get('username') or room.get('user_name')
+                if isinstance(username, str) and username.endswith('@chatroom'):
+                    self.rooms[username] = room
+                    if room.get('id') is not None:room_ids[room['id']] = username
             rows = con.execute("select room_id,member_id from chatroom_member").fetchall()
         except sqlite3.Error:
             return
@@ -416,7 +423,7 @@ class Wx4Data:
     def name_of(self, username: str) -> str:
         if not username:
             return ""
-        n = _display_name(self.contacts.get(username))
+        n = _display_name(self.contacts.get(username)) or _display_name(self.rooms.get(username))
         if n:
             return n
         if username == self.wxid:
@@ -483,6 +490,7 @@ class Wx4Data:
     def _retained_sessions(self, existing):
         """Discover retained message tables independently of the current friend list."""
         candidates = {name for name in self.contacts if not name.startswith('#id:')}
+        candidates.update(self.rooms)
         candidates.update(existing)
         shards = {}
         for con in self.msg_dbs:
@@ -650,6 +658,9 @@ class Wx4Data:
         elif mtype in (47, 11000):
             out["kind"] = "emoji"
             out["text"] = "[动画表情]"
+            game=describe_game(_xml(content))
+            if game:
+                out['extra']['game_emoji']=game;out['text']='['+game['label']+']'
         elif mtype == 42:
             out["kind"] = "card"
             out["text"] = "[名片] %s" % _txt(_xml(content), "nickname")
@@ -663,7 +674,7 @@ class Wx4Data:
             out["text"] = "[音视频通话]"
         elif mtype in (10000,10002):
             out["kind"] = "system"
-            out["text"] = self._system_text(content)
+            out["text"] = self._system_text(content, self.name_of)
         elif mtype in (49,11001,11002) or (mtype!=1 and '<appmsg' in content):
             return self._describe_appmsg(msg, out)
         else:
@@ -672,20 +683,62 @@ class Wx4Data:
         return out
 
     @staticmethod
-    def _system_text(content: str) -> str:
+    def _system_text(content: str, name_of=None) -> str:
         root = _xml(content)
         if root is None:
+            if re.match(r'(?:<\?xml[^>]*>\s*)?<sysmsg\b', content.lstrip()):
+                return '[系统消息内容不完整]'
             return content or "[系统消息]"
-        for name in ('replacemsg','content'):
-            node = _find(root, name)
-            if node is not None:
-                value=''.join(node.itertext()).strip()
-                if value:
-                    # Recall replacement strings may contain a tiny rich-text
-                    # fragment inside CDATA; render its text without XML tags.
-                    fragment=_xml('<root>'+value+'</root>') if '<' in value else None
-                    return ''.join(fragment.itertext()) if fragment is not None else value
-        return content or "[系统消息]"
+
+        def readable(node):
+            value=''.join(node.itertext()).strip() if node is not None else ''
+            # Rich-text CDATA is reduced to text before inserting nicknames,
+            # so a nickname containing angle brackets stays literal text.
+            fragment=_xml('<root>'+value+'</root>') if '<' in value else None
+            return ''.join(fragment.itertext()).strip() if fragment is not None else value
+
+        replacement=readable(_find(root,'replacemsg'))
+        if replacement:return replacement
+        container=_find(root,'content_template')
+        if container is None:container=root
+        plain=readable(container.find('plain'))
+        if plain:return plain
+        template=readable(_find(container,'template'))
+        if template:
+            values={}
+            for link in container.findall('.//link_list/link'):
+                name=link.get('name')
+                if not name:continue
+                members=link.findall('./memberlist/member')
+                if members:
+                    names=[]
+                    for member in members:
+                        username=member.findtext('username','')
+                        label=member.findtext('nickname') or member.findtext('displayname')
+                        names.append(label or (name_of(username) if name_of and username else username) or '群成员')
+                    values[name]=link.findtext('separator','、').join(names)
+                else:
+                    for field in ('plain','title','nickname','text'):
+                        value=readable(_find(link,field))
+                        if value:
+                            values[name]=value
+                            break
+
+            def substitute(match):
+                name=match.group(1) or match.group(2)
+                if name in values:return values[name] or '[未识别内容]'
+                # Some system templates (e.g. pats) store names directly,
+                # rather than in a profile link list.
+                value=container.findtext('.//'+name,'')
+                if value and name in ('username','fromusername','pattedusername','tousername') and name_of:
+                    value=name_of(value)
+                return value or '[未识别内容]'
+
+            return re.sub(r'\$([A-Za-z_][A-Za-z0-9_]*)\$|\$\{([A-Za-z_][A-Za-z0-9_]*)\}', substitute, template)
+        for name in ('content','plain','text','summary'):
+            value=readable(_find(root,name))
+            if value:return value
+        return '[暂不支持的系统消息]'
 
     def _describe_appmsg(self, msg: dict, out: dict) -> dict:
         content = msg["content"]
@@ -730,11 +783,12 @@ class Wx4Data:
             out["kind"] = "quote"
             if refer is not None:
                 rname = _txt(refer, "displayname")
-                rtext = self._refer_text(_txt(refer, "content"))
                 out["extra"]["refer_from"] = _txt(refer, "fromusr")
                 raw_quote=_txt(refer,'content')
                 try:quote_type=int(_txt(refer,'type') or 1)
                 except ValueError:quote_type=1
+                rtext=(self._system_text(raw_quote,self.name_of) if normalize_local_type(quote_type) in (10000,10002)
+                       else self._refer_text(raw_quote))
                 msg['_quote']={'sender':rname,'sender_wxid':_txt(refer,'fromusr'),
                     'server_id':_txt(refer,'svrid') or _txt(refer,'msgid'),
                     'type':quote_type,'content':raw_quote,'text':rtext,
@@ -771,7 +825,10 @@ class Wx4Data:
             out["text"] = "[文件] %s" % (fname or title or desc)
             return out
         if sub_i==8:
-            out['kind']='emoji';out['text']=title or '[动画表情]';return out
+            out['kind']='emoji';out['text']=title or '[动画表情]'
+            game=describe_game(root)
+            if game:out['extra']['game_emoji']=game;out['text']='['+game['label']+']'
+            return out
 
         if sub_i in (2000,2001):
             # Payment action URLs can carry transaction credentials. History
@@ -851,49 +908,53 @@ class Wx4Data:
         return rtext
 
     # -- 语音 --------------------------------------------------------------
-    def voice_blob(self, session: str, server_id: int):
-        """按 server_id 从 media_*.db 取 SILK 语音数据。"""
+    def voice_blobs(self, session: str, server_id: int):
+        """Yield bounded, account-local candidates; keep exact chat/id binding."""
+        if not re.fullmatch(r'-?\d+',str(server_id)):
+            return
+        number=int(server_id)
+        if not number or not -(1<<63) <= number < (1<<64):return
+        query_id=number-(1<<64) if number >= (1<<63) else number
         mapped = False
+        seen = set()
         for con in self.media_dbs:
-            if "VoiceInfo" not in self.tables_of(con):
-                continue
+            if 'VoiceInfo' not in self.tables_of(con):continue
             try:
-                r = con.execute("select rowid from Name2Id where user_name=?",
-                                (session,)).fetchone()
+                row = con.execute('SELECT rowid FROM Name2Id WHERE user_name=?', (session,)).fetchone()
+                if not row:continue
+                mapped = True
+                rows = con.execute('SELECT voice_data FROM VoiceInfo WHERE chat_name_id=? AND svr_id=? '
+                                   'AND length(voice_data) BETWEEN 1 AND 16777216 ORDER BY create_time DESC LIMIT 8',
+                                   (row[0], query_id))
+                for row in rows:
+                    if not isinstance(row[0], (bytes, bytearray, memoryview)):continue
+                    blob = bytes(row[0]);digest = hashlib.sha256(blob).digest()
+                    if digest not in seen:
+                        seen.add(digest)
+                        yield blob
+                    if len(seen) >= 8:return
             except sqlite3.Error:
                 continue
-            if not r:
-                continue
-            mapped = True
-            try:
-                row = con.execute(
-                    "select voice_data from VoiceInfo where chat_name_id=? and svr_id=? "
-                    "order by create_time desc limit 1", (r[0], server_id)).fetchone()
-            except sqlite3.Error:
-                continue
-            if row and row[0]:
-                return bytes(row[0])
-        # A removed contact can lose its Name2Id entry while the same-account
-        # voice blob survives. Use its exact positive server ID only when all
-        # matching blobs agree, so ambiguous cache rows cannot attach a wrong voice.
-        if not mapped and str(server_id).isdigit() and int(server_id) > 0:
+        # Deleted contacts may lose Name2Id. Accept their exact positive server
+        # ID only if every matching same-account blob agrees, never by timestamp.
+        if not mapped and number>0:
             found = None
             for con in self.media_dbs:
-                if 'VoiceInfo' not in self.tables_of(con):
-                    continue
+                if 'VoiceInfo' not in self.tables_of(con):continue
                 try:
-                    rows = con.execute('SELECT DISTINCT voice_data FROM VoiceInfo WHERE svr_id=? AND length(voice_data)>0 LIMIT 2', (server_id,))
+                    rows = con.execute('SELECT DISTINCT voice_data FROM VoiceInfo WHERE svr_id=? '
+                                       'AND length(voice_data)>0 LIMIT 2', (query_id,))
                     for row in rows:
-                        if not isinstance(row[0], (bytes, bytearray, memoryview)):
-                            return None
+                        if not isinstance(row[0], (bytes, bytearray, memoryview)) or len(row[0]) > 16*1024*1024:return
                         blob = bytes(row[0])
-                        if found is not None and found != blob:
-                            return None
+                        if found is not None and found != blob:return
                         found = blob
                 except sqlite3.Error:
                     continue
-            return found
-        return None
+            if found is not None:yield found
+
+    def voice_blob(self, session: str, server_id: int):
+        return next(self.voice_blobs(session, server_id), None)
 
     # -- 附件目录 ----------------------------------------------------------
     def account_dir(self) -> str:

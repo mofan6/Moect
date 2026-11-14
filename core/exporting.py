@@ -56,6 +56,10 @@ def portable_paths(msg,prefix):
 
 def readable_text(msg,markdown=False):
     text=msg.get('text','')
+    game=msg.get('extra',{}).get('game_emoji')
+    if markdown and game and text=='['+game['label']+']' and any(
+            r['kind']=='image' and r['status']=='available' for r in msg.get('resources',[])):
+        text=''
     quote=msg.get('quote')
     if quote:
         reference=readable_text(quote,markdown)

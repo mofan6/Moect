@@ -1,5 +1,14 @@
 # Open source attribution
 
+## WeChat built-in game result sprites
+
+The nine unmodified dice and rock-paper-scissors PNG result sprites are bundled
+for offline previews and exports. Original message result codes and image MD5s
+determine the displayed outcome; no result is randomized or rewritten. Artwork
+belongs to Tencent and the respective rights holders. Sources and fingerprints:
+`THIRD_PARTY_LICENSES/WeChat-game-emojis-NOTICE.txt` and
+`ui/wechat-game-emojis.json`.
+
 ## WeChat built-in text faces
 
 The preset library covers the 109 built-in faces checked against the user's

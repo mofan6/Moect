@@ -24,19 +24,20 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('directory',type=Path)
     parser.add_argument('--repository',default='mofan6/Moect')
-    parser.add_argument('--checksums',type=Path,help='Public checksum file for the two client products only.')
+    parser.add_argument('--checksums',type=Path,help='Optionally publish a checksum file for the two client products.')
     args=parser.parse_args()
     owner,name=args.repository.split('/')
     paths=[args.directory/f'Moect-{VERSION}-Setup-x64.exe',
-        args.directory/f'Moect-{VERSION}-Windows-x64.zip',
-        args.checksums or args.directory/'SHA256SUMS.txt']
+        args.directory/f'Moect-{VERSION}-Windows-x64.zip']
     if not all(p.is_file() for p in paths):raise SystemExit('Missing prepared release assets.')
-    if paths[-1].name!='SHA256SUMS.txt':raise SystemExit('Checksum asset must be named SHA256SUMS.txt.')
-    expected_checksums={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in paths[:2]}
-    supplied={}
-    for line in paths[-1].read_text(encoding='utf-8-sig').splitlines():
-        checksum_digest,checksum_name=line.split('  ',1);supplied[checksum_name]=checksum_digest
-    if supplied!=expected_checksums:raise SystemExit('Public checksums must match exactly the installer and portable ZIP.')
+    if args.checksums:
+        if args.checksums.name!='SHA256SUMS.txt':raise SystemExit('Checksum asset must be named SHA256SUMS.txt.')
+        expected_checksums={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+        supplied={}
+        for line in args.checksums.read_text(encoding='utf-8-sig').splitlines():
+            checksum_digest,checksum_name=line.split('  ',1);supplied[checksum_name]=checksum_digest
+        if supplied!=expected_checksums:raise SystemExit('Public checksums must match exactly the installer and portable ZIP.')
+        paths.append(args.checksums)
     env={**os.environ,'GIT_TERMINAL_PROMPT':'0'}
     result=subprocess.run(['git','credential','fill'],input='protocol=https\nhost=github.com\n\n',
         text=True,capture_output=True,env=env,check=True)

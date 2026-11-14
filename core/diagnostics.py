@@ -57,7 +57,8 @@ def write_report(service, directory, job_id=None):
         # keys and message text never enter this report.
         entries = [{key: task[key] for key in ('kind', 'status', 'progress', 'stage', 'error_code', 'diagnostic', 'created_at') if key in task} for task in jobs]
         allowed = {'moect_version', 'windows', 'wechat_versions', 'missing', 'resolved_databases',
-                   'failed_databases', 'skipped_databases', 'denied_processes', 'database_count'}
+                   'failed_databases', 'skipped_databases', 'denied_processes', 'database_count','media_databases_missing',
+                   'image_samples','processes_found','processes_readable','account_strings','account_objects'}
         for entry in entries:
             if 'diagnostic' in entry:
                 entry['diagnostic'] = {key: value for key, value in entry['diagnostic'].items() if key in allowed}

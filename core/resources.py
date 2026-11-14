@@ -19,7 +19,9 @@ from pathlib import Path
 from urllib.parse import urlparse
 from .avatars import AvatarStore,image_type
 from .media_codec import ImageKeys,MediaCodec,media_type,encrypted_media_variants
-from wx4.reader import reference_text
+from wx4.reader import reference_text,_xml
+from wx4.game_emojis import describe_game,from_hash
+from .game_emojis import game_image
 from wx4.forward import build_forward
 from .export_options import RESOURCE_TYPES,export_preferences,is_system_message
 
@@ -439,7 +441,15 @@ class ResourceStore:
         skip=category in self.skipped
         skip_all=self.skipped==set(RESOURCE_TYPES)
         if skip:self._skip(msg,{'image':'图片/动画表情','video':'视频','audio':'语音','file':'文件内容'}[category])
-        if kind=='emoji' and not skip:
+        if kind=='emoji':
+            game=msg['extra'].get('game_emoji') or describe_game(_xml(msg.get('content') or msg.get('_resource_source','')))
+            if not game:
+                game=next((found for digest in (msg.get('_media') or {}).get('hashes',[]) if (found:=from_hash(digest))),None)
+            if game:
+                msg['extra']['game_emoji']=game;msg['text']='['+game['label']+']'
+                image=game_image(game) if not skip else None
+                if image:resources.append(self._copy('wechat-game:'+game['md5'],'image',image,'.png'))
+        if kind=='emoji' and not skip and not resources:
             original=msg.get('_media') or {}
             msg['_media']={name:list(original.get(name) or []) for name in ('keys','hashes','urls','paths','thumbnail_hashes','main_hashes')}
             self._emoticon_hints(msg)
@@ -457,14 +467,20 @@ class ResourceStore:
                     break
         audio_diagnostics={}
         if kind=='voice' and not skip:
-            blob=self.data.voice_blob(self.session,msg.get('server_id'))
+            candidates=self.data.voice_blobs(self.session,msg.get('server_id'))
+            blob=next(candidates,None)
             if blob:
                 identity='voice_'+str(msg['server_id'])+'.silk'
-                converted=self.codec.audio(blob,Path(self.tmp.name)/'playback.wav')
+                converted=None;checked=0
+                for checked,candidate in enumerate(chain((blob,),candidates),1):
+                    self.cancel()
+                    converted=self.codec.audio(candidate,Path(self.tmp.name)/'playback.wav')
+                    if converted:break
+                audio_diagnostics={'candidates_checked':checked}
                 if converted:
                     resources.append(self._copy(converted,'audio',extension='.wav',identity_source=identity))
                 else:
-                    audio_diagnostics={'reason':self.codec.audio_reason}
+                    audio_diagnostics['reason']=self.codec.audio_reason
                     # A failed conversion is an unsupported original, rather
                     # than an available audio resource that browsers cannot play.
                     resources.append(self._copy(identity,'original',blob,'.silk',status='unsupported'))
@@ -520,6 +536,8 @@ class ResourceStore:
                 'unsupported':'原文件已保存，但浏览器格式转换未成功。',
                 'corrupt':'文件内容未能通过格式校验，已保留原文件。'}
             msg['resource_status']=status;msg['resource_notice']=notices[status]
+            if kind=='voice' and status=='missing':
+                msg['resource_notice']='当前快照没有这条语音的数据。请在电脑微信完整播放语音，再点击预览右下角“刷新”重新连接并整理；图片恢复不会更新语音数据库。'
             if kind=='voice' and status=='unsupported':
                 reason=audio_diagnostics.get('reason')
                 msg['resource_notice']={

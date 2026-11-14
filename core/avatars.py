@@ -3,7 +3,7 @@ import base64
 import hashlib
 import urllib.request
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse,quote
 
 
 def image_type(blob):
@@ -82,6 +82,14 @@ class AvatarStore:
     def ui(self, username):
         blob=self.blob(username)
         if blob:return 'data:'+image_type(blob)[1]+';base64,'+base64.b64encode(blob).decode()
+        url=self.data.avatar_of(username)
+        return url if avatar_host(url) else ''
+
+    def reference(self, username):
+        """Keep session lists small; local avatar bytes are fetched on demand."""
+        if any('head' in rel.lower() or 'avatar' in rel.lower() for rel in self.data._conns):
+            identity=hashlib.sha256(str(Path(self.data.root).resolve()).encode()).hexdigest()[:16]
+            return 'moect-avatar:'+identity+':'+quote(username,safe='')
         url=self.data.avatar_of(username)
         return url if avatar_host(url) else ''
 

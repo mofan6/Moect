@@ -48,6 +48,7 @@ def run(window,api,directory):
         check('close-preview',"(window.__wce.closePreview(),true)")
         check('show-export',"(window.__wce.chooseItems(['demo_design@chatroom','demo_lin']),true)")
         check('export-dialog',"document.querySelector('[role=dialog]')?.textContent.includes('配置就绪')")
+        check('export-options-ready',"[...document.querySelectorAll('button')].some(b=>b.textContent==='开始批量导出'&&!b.disabled)")
         check('start-export',"([...document.querySelectorAll('button')].find(b=>b.textContent==='开始批量导出').click(),true)")
         check('batch-completed',"window.__wce.state.tasks.filter(t=>t.kind==='export'&&t.status==='completed').length===2")
         capture('03-tasks')
@@ -56,7 +57,7 @@ def run(window,api,directory):
         check('deleted',"window.__wce.state.tasks.length===1")
         check('overview',"(window.__wce.setTab('overview'),true)")
         time.sleep(.5);capture('04-overview-task')
-        check('theme',"(document.querySelector('[title=切换主题]').click(),true)")
+        check('theme',"(document.querySelector('[title=切换亮暗]').click(),true)")
         check('dark',"document.documentElement.classList.contains('dark')")
         time.sleep(.5);capture('05-dark')
         from core.window_chrome import corner_preference

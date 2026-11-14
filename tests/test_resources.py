@@ -67,7 +67,7 @@ class ResourceTests(unittest.TestCase):
         self.assertEqual(self.archive.profile()['name'],'合成昵称')
         self.assertEqual(self.archive.profile()['alias'],'synthetic_alias')
         self.assertTrue(self.archive.profile()['avatar_url'].startswith('data:image/png'))
-        self.assertTrue(self.archive.sessions()[0]['avatar_url'].startswith('data:'))
+        self.assertTrue(self.archive.sessions()[0]['avatar_url'].startswith('moect-avatar:'))
         lib=dict(self.lib,wxid=USER+'_a1b2')
         archive=Archive(lib)
         try:self.assertEqual(archive.profile()['wxid'],USER)

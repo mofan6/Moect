@@ -479,6 +479,29 @@ class KeyExtractor:
     # -- 对外入口 --------------------------------------------------------
     def extract(self, save_to: str | None = None) -> dict[str, str]:
         self.collect()
+        # A new client can discard transient process keys after opening a DB.
+        # Reuse only this account's previously saved keys, after validating them
+        # against the current database pages (including key rotation).
+        if save_to and os.path.isfile(save_to):
+            try:
+                cached = load_keys(save_to)
+                same_account = (isinstance(cached, dict) and isinstance(cached.get('_db_storage'), str) and bool(cached['_db_storage']) and
+                    os.path.normcase(os.path.realpath(cached.get('_db_storage', ''))) ==
+                    os.path.normcase(os.path.realpath(self.db_storage)))
+            except (OSError, ValueError, TypeError):
+                same_account = False
+            if same_account:
+                for item in cached.values():
+                    self.cancel()
+                    if (isinstance(item, dict) and isinstance(item.get('enc_key'), str)
+                            and re.fullmatch(r'[0-9a-fA-F]{64}', item['enc_key'])):
+                        salt=item.get('salt')
+                        self._try_key(item['enc_key'], salt if isinstance(salt,str) else None)
+        self.stats['cached_salts'] = len(self.keys)
+        if self.salt_index and len(self.keys) == len(self.salt_index):
+            self.stats.update(elapsed=0, resolved=len(self.keys), total_salts=len(self.salt_index))
+            if save_to:self.save(save_to)
+            return self.keys
         enable_debug_privilege()
         procs = find_weixin_processes()
         if not procs:

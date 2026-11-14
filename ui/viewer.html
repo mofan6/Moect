@@ -115,7 +115,7 @@ function renderCard(parent,m){
  if(m.kind==='miniprogram'&&!href)footer.append(element('span','wx-card-status','在微信中打开'));
  parent.append(card);return true
 }
-function messageText(m){const placeholders={image:'[图片]',emoji:'[动画表情]',voice:'[语音]'};const text=String(m.text||'');return placeholders[m.kind]===text.trim()?'':text}
+function messageText(m){const placeholders={image:'[图片]',emoji:'[动画表情]',voice:'[语音]'};const text=String(m.text||''),game=m.extra?.game_emoji;if(game&&text==='['+game.label+']'&&m.resources?.some(r=>r.kind==='image'&&r.status==='available'))return '';return placeholders[m.kind]===text.trim()?'':text}
 function renderContent(parent,m,withQuote=true){const forward=renderForward(parent,m),card=!forward&&renderCard(parent,m);if(!forward&&!card)textWithLinks(parent,messageText(m));if(card&&parent.classList.contains('bubble'))parent.classList.add('has-card');if(withQuote)renderQuote(parent,m);renderResources(parent,m,r=>!card||(!['thumbnail','source_icon'].includes(r.role)&&!(m.kind==='file'&&r.kind==='file'&&r.status==='available')));if(m.resource_notice)parent.append(element('p','resource-note',m.resource_notice))}
 function renderQuote(parent,m){const q=m.quote||m.extra?.reply;if(!q)return;const card=element('blockquote','quote');card.append(element('strong','',(q.sender||'引用消息')+(q.time_str?' · '+q.time_str:'')));renderContent(card,q,false);if(q.server_id&&String(q.server_id)!=='0'){const button=element('button','reply-jump','查看原消息');button.onclick=()=>jump(String(q.server_id));card.append(button)}parent.append(card)}
 function isSystemMessage(m){return m.kind==='system'||[10000,10002].includes(Number(m.type))}

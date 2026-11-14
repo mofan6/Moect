@@ -51,6 +51,19 @@ class IssueMediaRecoveryTests(unittest.TestCase):
         self.assertGreater(result['resource_summary']['encrypted'], 0)
         self.assertNotIn(self.key.decode(), (output / 'resource-report.jsonl').read_text(encoding='utf-8'))
 
+    def test_recovery_help_preference_is_strict_durable_and_rolled_back_on_save_failure(self):
+        self.assertFalse(self.service.state()['image_recovery_skip_help'])
+        for value in ('true',1,None,[]):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                self.service.settings({'image_recovery_skip_help':value})
+        with patch.object(self.service,'save',side_effect=OSError('Synthetic write failure')):
+            with self.assertRaises(OSError):self.service.settings({'image_recovery_skip_help':True})
+        self.assertFalse(self.service.state()['image_recovery_skip_help'])
+        self.service.settings({'image_recovery_skip_help':True})
+        reloaded=Service(ASSETS,self.root/'state')
+        try:self.assertTrue(reloaded.state()['image_recovery_skip_help'])
+        finally:reloaded.shutdown()
+
     def test_recovery_clears_failed_preview_and_exports_with_the_verified_key(self):
         self.service.account_assets({'kind': 'moments'})
         revision = self.service.state()['library']['data_revision']

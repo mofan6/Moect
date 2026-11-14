@@ -1,6 +1,6 @@
 ; Build with installer/build.ps1 after python build.py.
 #ifndef AppVersion
-  #define AppVersion "1.2.8"
+  #define AppVersion "1.3.0"
 #endif
 
 [Setup]
@@ -54,8 +54,10 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 [Files]
 Source: "..\dist\Moect\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\修复说明.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\build-support\MicrosoftEdgeWebview2Setup.exe"; Flags: dontcopy
+
+[InstallDelete]
+Type: files; Name: "{app}\修复说明.md"
 
 [Icons]
 Name: "{userdesktop}\Moect"; Filename: "{app}\Moect.exe"; WorkingDir: "{app}"; Tasks: desktopicon

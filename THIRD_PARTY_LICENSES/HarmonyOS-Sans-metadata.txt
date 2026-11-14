@@ -1,4 +1,12 @@
 HarmonyOS Sans SC
-Bundled at the user's explicit request, from the locally installed original font.
+Regular was bundled at the user's explicit request, from the locally installed original font.
+
+Regular and Medium are bundled as unmodified original TTF files.
+Regular SHA-256: 297b088424be212207df2ce8b98e335468b782aa6b96832af0b8b773d711e2b1
+Medium SHA-256: 6ed1553edccddc48eb27ff25d134a4a715cf54211238d4840b3038576cba1944
+Medium source (original font package mirror):
+https://github.com/Jannchie/223/blob/main/src/assets/fonts/HarmonyOS_Sans_SC_Medium.ttf
+Upstream package: https://developer.huawei.com/images/download/general/HarmonyOS-Sans.zip
+The mirror's Regular file matches the existing locally sourced Regular file.
 
 Copyright 2021 Huawei Device Co., Ltd. All Rights Reserved.

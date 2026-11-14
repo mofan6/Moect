@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from "react"
+import React, { useState, useEffect, useRef } from "react"
 import {LocalMediaPreview} from "@/src/LocalMediaPreview"
 import {WeChatText} from "@/src/WeChatText"
 import { motion, AnimatePresence } from "framer-motion"
@@ -34,6 +34,9 @@ interface MessagePreviewModalProps {
     peer: { chatType: number, peerUid: string }
   } | null
   onExport?: (peer: any, timeRange?: { startTime?: number, endTime?: number }) => void
+  onRefresh?: () => Promise<boolean | void>
+  refreshing?: boolean
+  revision?: string
 }
 
 interface Message {
@@ -88,7 +91,8 @@ function ForwardPreview({record,depth=0}:{record:any,depth?:number}) {
   </details>
 }
 
-export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePreviewModalProps) {
+export function MessagePreviewModal({ open, onClose, chat, onExport, onRefresh, refreshing=false, revision }: MessagePreviewModalProps) {
+  const fetchGeneration=useRef(0),previousRevision=useRef(revision)
   const [messages, setMessages] = useState<Message[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -102,7 +106,7 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
   const [timeRangeError, setTimeRangeError] = useState<string | null>(null)
   const [useStreamMode, setUseStreamMode] = useState(false)
   const [searchProgress, setSearchProgress] = useState("")
-  const [currentFilter, setCurrentFilter] = useState<any>(null)
+  const currentFilter = useRef<any>(null)
   
   const MESSAGES_PER_PAGE = 50
   
@@ -121,26 +125,19 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
 
   const fetchMessages = async (page: number, filter?: any) => {
     if (!chat) return
+    const generation=++fetchGeneration.current
     setLoading(true)
     setError(null)
 
     try {
-      let finalFilter = currentFilter
-      if (!finalFilter) {
-        finalFilter = { startTime: filter?.startTime || 0, endTime: filter?.endTime || Date.now() }
-        setCurrentFilter(finalFilter)
-      } else if (filter) {
-        finalFilter = {
-          startTime: filter.startTime ?? finalFilter.startTime,
-          endTime: filter.endTime ?? finalFilter.endTime, query: filter.query ?? finalFilter.query
-        }
-        setCurrentFilter(finalFilter)
-      }
+      const finalFilter = { startTime:0, query:'', ...currentFilter.current, ...filter }
+      currentFilter.current = finalFilter
 
       const response = await fetch('/api/messages/fetch', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ peer: chat.peer, page, limit: MESSAGES_PER_PAGE, filter: finalFilter })
+        body: JSON.stringify({ peer: chat.peer, page, limit: MESSAGES_PER_PAGE,
+          filter: { ...finalFilter, endTime:finalFilter.endTime ?? Date.now() } })
       })
 
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`)
@@ -148,32 +145,47 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
       if (!result.success) throw new Error(result.error?.message || '获取消息失败')
 
       const data: MessagePreviewResponse = result.data
+      if(generation!==fetchGeneration.current)return
       setMessages(data.messages || [])
       setTotalCount(data.totalCount || 0)
       setTotalPages(data.totalPages || 1)
       setHasNext(data.hasNext || false)
     } catch (err) {
+      if(generation!==fetchGeneration.current)return
       setError(err instanceof Error ? err.message : '获取消息失败')
     } finally {
-      setLoading(false)
+      if(generation===fetchGeneration.current)setLoading(false)
     }
   }
+
+  const reloadCurrentMessages=()=>{
+    setCurrentPage(1)
+    void fetchMessages(1)
+  }
+  const refreshArchive=async()=>{
+    const pending=await onRefresh?.()
+    if(!pending)reloadCurrentMessages()
+  }
+  useEffect(()=>{
+    if(previousRevision.current===revision)return
+    previousRevision.current=revision
+    if(open&&chat)reloadCurrentMessages()
+  },[revision])
 
   const handleSearch = () => {
     if (!validateTimeRange(startDate,endDate)) return;
     setUseStreamMode(false);setCurrentPage(1);
-    fetchMessages(1,{startTime:startDate?new Date(startDate+'T00:00:00+08:00').getTime():0,endTime:endDate?new Date(endDate+'T00:00:00+08:00').getTime()+86400000-1:Date.now(),query:searchQuery.trim()});
+    fetchMessages(1,{startTime:startDate?new Date(startDate+'T00:00:00+08:00').getTime():0,endTime:endDate?new Date(endDate+'T00:00:00+08:00').getTime()+86400000-1:undefined,query:searchQuery.trim()});
   }
 
   const handleTimeRangeChange = () => {
     if (!validateTimeRange(startDate, endDate) || (!startDate && !endDate)) return
     const filter = {
       startTime: startDate ? new Date(startDate+'T00:00:00+08:00').getTime() : 0,
-      endTime: endDate ? new Date(endDate+'T00:00:00+08:00').getTime() + 86400000 - 1 : Date.now()
+      endTime: endDate ? new Date(endDate+'T00:00:00+08:00').getTime() + 86400000 - 1 : undefined
     }
     setCurrentPage(1)
     setUseStreamMode(false)
-    setCurrentFilter(filter)
     fetchMessages(1, filter)
   }
   
@@ -333,9 +345,10 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
       setEndDate("")
       setTimeRangeError(null)
       setError(null)
-      setCurrentFilter(null)
+      currentFilter.current=null
       fetchMessages(1)
     }
+    return ()=>{fetchGeneration.current++}
   }, [open, chat])
 
   /**
@@ -457,7 +470,7 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
             </Button>
             {(startDate || endDate) && (
               <button
-                onClick={() => { setStartDate(""); setEndDate(""); setTimeRangeError(null); setCurrentFilter(null); fetchMessages(1) }}
+                onClick={() => { setStartDate(""); setEndDate(""); setTimeRangeError(null); currentFilter.current={...currentFilter.current,startTime:0,endTime:undefined}; setCurrentPage(1); fetchMessages(1) }}
                 className="text-xs text-muted-foreground hover:text-foreground transition-colors"
               >
                 清除
@@ -482,7 +495,7 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
                 className="flex-1 text-xs bg-transparent outline-none text-foreground placeholder:text-muted-foreground/60"
               />
               {searchQuery && (
-                <button onClick={() => { setSearchQuery(""); setUseStreamMode(false); setSearchProgress(""); fetchMessages(1,{query:""}) }}>
+                <button onClick={() => { setSearchQuery(""); setUseStreamMode(false); setSearchProgress(""); setCurrentPage(1); fetchMessages(1,{query:""}) }}>
                   <X className="w-3.5 h-3.5 text-muted-foreground hover:text-foreground" />
                 </button>
               )}
@@ -551,7 +564,7 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
                           </span>
                         </div>
                         {msg.richContent?.forward?<ForwardPreview record={msg.richContent.forward}/>:<div className="text-sm text-foreground/80 [overflow-wrap:anywhere] leading-relaxed">
-                          {msg.richContent?.media&&<LocalMediaPreview hint={msg.richContent.media}/>}
+                          {msg.richContent?.media&&<LocalMediaPreview key={msg.msgId+':'+revision} hint={msg.richContent.media} onRefresh={onRefresh} refreshing={refreshing}/>}
                           {(!msg.richContent?.media||!/^\[(?:图片|动画表情|语音.*)\]$/.test(msg.elements[0]?.textElement?.content||''))&&formatMessageElements(msg.elements)}
                           {title&&title!==bodyText&&<span className="block mt-1 font-medium">{title}</span>}
                           {msg.richContent?.reply&&<span className="block mt-2 pl-3 border-l-2 border-primary/30 text-xs text-muted-foreground whitespace-pre-wrap [overflow-wrap:anywhere]">{msg.richContent.reply.sender}：<WeChatText text={msg.richContent.reply.text}/></span>}
@@ -602,12 +615,13 @@ export function MessagePreviewModal({ open, onClose, chat, onExport }: MessagePr
             <Button
               variant="outline"
               size="sm"
-              onClick={() => fetchMessages(currentPage)}
-              disabled={loading}
+              onClick={() => void refreshArchive()}
+              disabled={loading||refreshing}
+              title="重新连接并整理微信"
               className="rounded-full h-8 text-xs px-4"
             >
-              {loading ? <Loader size={14} className="mr-1.5" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
-              刷新
+              {loading||refreshing ? <Loader size={14} className="mr-1.5" /> : <RefreshCw className="w-3.5 h-3.5 mr-1.5" />}
+              {refreshing?'正在整理':'刷新'}
             </Button>
             {onExport && (
               <Button size="sm" onClick={handleExportWithTimeRange} className="rounded-full h-8 text-xs px-4">

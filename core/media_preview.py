@@ -30,7 +30,10 @@ def preview(archive, library, payload, destination, cancel):
     message = archive.data._build_msg(row, archive.data._name2id(connection), session, shard)
     if message['kind'] not in ('image', 'emoji', 'voice'):
         raise ValueError('此类消息没有可预览媒体。')
-    identity = hashlib.sha256(json.dumps([library['root'],session,shard,local_id,str(message['server_id'])]).encode()).hexdigest()
+    cache_key=[library['root'],session,shard,local_id,str(message['server_id'])]
+    game=message.get('extra',{}).get('game_emoji')
+    if game:cache_key.extend(('game-result-v1',game['type'],game['value']))
+    identity = hashlib.sha256(json.dumps(cache_key).encode()).hexdigest()
     folder = Path(destination)/identity
     folder.mkdir(parents=True, exist_ok=True)
     cache = folder/'preview.json'

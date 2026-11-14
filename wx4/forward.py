@@ -27,7 +27,7 @@ def build_forward(data,parent,limit=5000,depth=0,budget=None):
     result['total']=len(items)
     types={1:(1,'text'),2:(3,'image'),3:(34,'voice'),4:(43,'video'),
            5:(49,'link'),6:(48,'location'),7:(49,'link'),8:(49,'file'),
-           17:(49,'chatrecord'),19:(49,'miniprogram'),22:(49,'miniprogram')}
+           17:(49,'chatrecord'),19:(49,'miniprogram'),22:(49,'miniprogram'),37:(47,'emoji')}
     for index,item in enumerate(items):
         if budget[0]<=0:
             result['truncated']=True;break
@@ -61,8 +61,9 @@ def build_forward(data,parent,limit=5000,depth=0,budget=None):
         if item.attrib.get('dataid'):child['_media']['paths'].append(item.attrib['dataid'])
         heading=_txt(item,'datatitle') or _txt(item,'title')
         if kind=='text':child['text']=content or heading
-        elif kind in ('image','voice','video'):
-            child['text']={'image':'[图片]','voice':'[语音]','video':'[视频]'}[kind]
+        elif kind in ('image','voice','video','emoji'):
+            child['text']={'image':'[图片]','voice':'[语音]','video':'[视频]','emoji':'[动画表情]'}[kind]
+            if kind=='emoji':child['content']=content if content.lstrip().startswith('<') else source
             if _txt(item,'datafmt').lower() in ('gif','webp') and kind=='image':child['kind']='emoji'
         elif kind=='file':
             child['extra']={'filename':heading or '转发附件','filesize':_txt(item,'datasize')}

@@ -1,4 +1,6 @@
-/* Explicit file source: independent of system aliases and fallback fonts. */
+/* Use original Regular/Medium outlines; synthetic bold closes small CJK counters.
+   Heavier requested weights use the closest real face (Medium), without emboldening. */
 @font-face{font-family:'WCE HarmonyOS Sans';src:url('../fonts/HarmonyOS_Sans_SC_Regular.ttf') format('truetype');font-weight:400;font-style:normal;font-display:block}
+@font-face{font-family:'WCE HarmonyOS Sans';src:url('../fonts/HarmonyOS_Sans_SC_Medium.ttf') format('truetype');font-weight:500;font-style:normal;font-display:block}
 :root{--font-geist-sans:'WCE HarmonyOS Sans',sans-serif;--font-geist-mono:Consolas,monospace}
-html,body{margin:0;-webkit-font-smoothing:auto;text-rendering:optimizeLegibility;font-synthesis:weight style}
+html,body{margin:0;-webkit-font-smoothing:auto;text-rendering:optimizeLegibility;font-synthesis:style}

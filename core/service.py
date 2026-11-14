@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -15,7 +16,7 @@ from .data import Archive, validate_root
 from .demo import DemoArchive
 from .exporting import FORMATS, export_index, export_session, clean, export_folder_name, unused_folder
 from .avatars import AvatarStore, image_type, avatar_host
-from .version import VERSION,APP_NAME
+from .version import VERSION,APP_NAME,TUTORIAL_REVISION
 from .paths import app_data_root
 from .export_options import export_preferences,is_system_message
 from .themes import ACCENT_IDS,palette,accent_choices
@@ -35,7 +36,7 @@ def session_sort(value):
 
 def task_category(task):
     category=task.get('category') or task.get('format')
-    if category in ('moments','stickers'):return category
+    if category in ('moments','stickers','favorites'):return category
     return 'sessions' if task.get('kind') in ('export','connect') else 'other'
 
 
@@ -87,6 +88,7 @@ class Service:
         self._closed=False
         self._maintenance=False
         self._cache_readers=0
+        self._storage_timer=None
         self.config = {'theme':'light', 'accent':'violet', 'export_dir': str(Path.home()/'Documents'/APP_NAME/'exports'),
                        'library': None, 'tasks': []}
         if self.config_path.exists():
@@ -116,6 +118,9 @@ class Service:
             self.config.pop('storage_dir', None)
         history = self.config.get('storage_history')
         self.config['storage_history'] = [path for path in history if isinstance(path, str) and path] if isinstance(history, list) else []
+        if not storage.valid_limit(self.config.get('storage_limit_gb')):
+            self.config['storage_limit_gb'] = 0
+        self._startup_storage_limit = self.config['storage_limit_gb']
         legacy_export=str(Path.home()/'Documents'/'WeChatExporter'/'exports')
         if os.path.normcase(os.path.normpath(self.config['export_dir']))==os.path.normcase(os.path.normpath(legacy_export)):
             self.config['export_dir']=str(Path.home()/'Documents'/APP_NAME/'exports')
@@ -138,14 +143,20 @@ class Service:
         try:self.config['session_sort']=session_sort(self.config.get('session_sort'))
         except ValueError:self.config['session_sort']={'field':'lastActivity','order':'desc'}
         if not isinstance(self.config.get('accent'),str) or self.config['accent'] not in ACCENT_IDS:self.config['accent']='violet'
-        seen=self.config.get('asset_tutorials')
-        self.config['asset_tutorials']={kind:bool(isinstance(seen,dict) and seen.get(kind) is True) for kind in ('moments','stickers')}
-        self.config['app_onboarding_seen']=self.config.get('app_onboarding_seen') is True
+        self.config['image_recovery_skip_help']=self.config.get('image_recovery_skip_help') is True
+        self.config['storage_limit_help_hidden']=self.config.get('storage_limit_help_hidden') is True
+        seen=self.config.get('tutorials_seen')
+        self.config['tutorials_seen']={kind:seen.get(kind,'') if isinstance(seen,dict) and isinstance(seen.get(kind),str) else ''
+                                      for kind in ('app','moments','stickers','favorites')}
+        self.config.pop('asset_tutorials',None)
+        self.config.pop('app_onboarding_seen',None)
         # Capture before the frontend marks the tutorial as shown. The first
         # process must stay manual even after closing/reloading its tutorial.
-        self._startup_reconnect_allowed = self.config['app_onboarding_seen']
+        self._startup_reconnect_allowed = self.config['tutorials_seen']['app']==TUTORIAL_REVISION
         from .online import OnlineChannel
         self.online=OnlineChannel(self)
+        if self._startup_storage_limit:
+            self._schedule_storage_check(10)
 
     def appearance(self):return palette(self.config['theme'],self.config['accent'])
 
@@ -195,7 +206,18 @@ class Service:
 
     def avatar(self,url):
         with self.cache_access():
-            if not isinstance(url,str) or len(url)>4096 or not avatar_host(url):return {'url':''}
+            if not isinstance(url,str) or len(url)>4096:return {'url':''}
+            if url.startswith('moect-avatar:'):
+                from urllib.parse import unquote
+                with self.lock:library=dict(self.library or {})
+                if not library or library.get('demo'):return {'url':''}
+                identity=hashlib.sha256(str(Path(library['root']).resolve()).encode()).hexdigest()[:16]
+                prefix='moect-avatar:'+identity+':'
+                if not url.startswith(prefix):return {'url':''}
+                with self.read_archive(library) as archive:
+                    blob=archive.avatars.blob(unquote(url[len(prefix):]),download=True)
+                    return {'url':'data:'+image_type(blob)[1]+';base64,'+base64.b64encode(blob).decode() if blob else ''}
+            if not avatar_host(url):return {'url':''}
             data=SimpleNamespace(_conns={},avatar_of=lambda user:url)
             blob=AvatarStore(data,self.storage_root/'avatar-cache').blob('',download=True)
             return {'url':'data:'+image_type(blob)[1]+';base64,'+base64.b64encode(blob).decode() if blob else ''}
@@ -209,7 +231,10 @@ class Service:
                     'accent':self.config['accent'],'accents':accent_choices(),'appearance':self.appearance(),
                     'export_dir':self.config['export_dir'],
                     'archive_options':public_options(self.config.get('archive_options')),
+                    'image_recovery_skip_help':self.config['image_recovery_skip_help'],
                     'storage_dir':str(self.storage_root),'storage_warning':self.storage_warning,'storage_busy':self._maintenance,
+                    'storage_limit_gb':self.config['storage_limit_gb'],
+                    'storage_limit_help_hidden':self.config['storage_limit_help_hidden'],
                     'library':dict(name=lib.get('profile',{}).get('name') or lib['name'],
                                    profile=lib.get('profile',{}),demo=lib.get('demo', False),
                                    live=bool(lib.get('account_dir')),assets_revision=lib.get('assets_revision',''),
@@ -468,7 +493,7 @@ class Service:
                 denied = sum(bool(item.get('error')) for item in ex.stats.get('scan', []))
                 if denied:
                     raise ConnectionProblem('检测到微信，但读取微信进程被拒绝。请以与微信相同的权限运行 Moect。', 'process_access_denied', {'denied_processes': denied})
-                raise ConnectionProblem('未找到与所选数据库匹配的密钥。请确认登录的是该账号、所选目录属于当前微信；历史文件或微信版本可能需要进一步适配。', 'no_matching_keys', {'database_count': len(ex.db_files)})
+                raise ConnectionProblem('未取得与所选数据库匹配的读取凭据。请确认登录账号与目录一致；当前微信版本也可能改变了凭据的内存布局，可导出诊断信息排查。恢复图片不会解决数据库连接问题。', 'no_matching_keys', {'database_count': len(ex.db_files)})
             destination = slot/('snapshot_'+job['id'][:12])
             self._update(job, progress=45, stage='snapshot', detail='正在创建本地聊天快照…')
             n = 0
@@ -501,13 +526,17 @@ class Service:
                     self._update(job,title='连接微信 · '+lib['name'])
                 finally: archive.close()
                 failed = len(res['failed'])
+                resolved={name.replace('\\','/') for name in keys}
+                missing_media=sum(Path(item['rel']).name.startswith('media_') and item['rel'].replace('\\','/') not in resolved for item in ex.db_files)
                 with self.lock:
                     check_connection()
                     self._library_epoch += 1
                     self._moments_preview_cache.clear()
                     self._demo_previous = None
                     self.library = lib; self.config['library'] = lib
-                self._update(job, detail='已连接，找到 %d 个会话%s' % (len(sessions), ('；%d 个数据库未能处理' % failed) if failed else ''))
+                self._update(job, diagnostic={**job.get('diagnostic',{}),'media_databases_missing':missing_media},
+                             detail='已连接，找到 %d 个会话%s%s' % (len(sessions), ('；%d 个数据库未能处理' % failed) if failed else '',
+                                ('；%d 个语音数据库尚无可用读取凭据，部分语音可能缺失' % missing_media) if missing_media else ''))
             except BaseException:
                 shutil.rmtree(destination, ignore_errors=True)
                 raise
@@ -688,6 +717,11 @@ class Service:
                 return {'available':False,'notice':'请先连接微信账号；演示模式不包含真实的表情包和朋友圈。'}
             kind=payload.get('kind')
             if kind=='stickers':return StickerCatalog(library).summary()
+            if kind=='favorites':
+                from .favorites import FavoriteCatalog
+                dates=options_from({k:payload[k] for k in ('start','end') if k in payload})
+                with self.read_archive(library) as archive:
+                    return FavoriteCatalog(library,archive.data.name_of).summary({**payload,'_start':dates.get('start'),'_end':dates.get('end')})
             if kind!='moments':raise ValueError('不支持的资源类型')
             archive=self.archive(library)
             try:
@@ -738,6 +772,51 @@ class Service:
         self._submit_jobs([(job, work)])
         return {'job': job['id']}
 
+    def favorite_preview(self,payload):
+        from .favorites import FavoriteCatalog,FavoriteResources
+        from .resources import ResourceStore
+        import tempfile
+        import time
+        identity=payload.get('id')
+        if not isinstance(identity,str) or not identity.isdigit():raise ValueError('收藏选择无效')
+        with self.lock:library=dict(self.library or {});epoch=self._library_epoch
+        if not library or library.get('demo'):raise ValueError('请先连接微信。')
+        def check():
+            with self.lock:
+                if epoch!=self._library_epoch or self._closed:raise Cancelled()
+        with self.read_archive(library) as archive:
+            item=next(FavoriteCatalog(library,archive.data.name_of).items({'ids':[identity]},check),None)
+            if item is None:raise ValueError('这条收藏已变化，请刷新列表。')
+            class PreviewBudget(Exception):pass
+            deadline=time.monotonic()+5
+            def preview_check():
+                check()
+                if time.monotonic()>deadline:raise PreviewBudget()
+            with tempfile.TemporaryDirectory(prefix='moect-favorite-preview-') as tmp:
+                store=ResourceStore(archive.data,'',Path(tmp),preview_check,options={'includeAvatars':False},preview=True)
+                resolver=FavoriteResources(store,library,seconds=3)
+                remaining=6
+                def preview(block):
+                    nonlocal remaining
+                    if block['kind']=='image' and remaining:
+                        remaining-=1;resolver.resolve(block)
+                        for resource in block['resources']:
+                            if resource['kind']!='image':continue
+                            from PIL import Image
+                            import io
+                            with Image.open(Path(tmp)/resource['path']) as image:
+                                image.thumbnail((640,640));output=io.BytesIO();image.convert('RGB').save(output,format='JPEG',quality=82)
+                            resource['url']='data:image/jpeg;base64,'+base64.b64encode(output.getvalue()).decode()
+                            resource.pop('path',None)
+                    for child in block.get('children',[]):preview(child)
+                try:
+                    try:
+                        for block in item['blocks']:preview(block)
+                    except PreviewBudget:
+                        item['preview_notice']='部分图片尚未预览；导出时会继续读取完整附件。'
+                    check();return clean(item)
+                finally:store.close()
+
     def refresh_assets(self,payload=None):
         from .account_assets import open_asset_db,tables
         payload=dict(payload or {});prepare_stickers=payload.get('kind')=='stickers'
@@ -746,8 +825,9 @@ class Service:
             if not library.get('account_dir') or library.get('demo'):raise ValueError('请先连接本机微信账号，再刷新资源快照。')
             if any(t['kind'] in ('connect','refresh_assets','recover_images') and t['status'] in ('queued','running') for t in self.config['tasks']):
                 raise ValueError('正在连接或刷新微信，请等待当前任务完成。')
-            job=self._new_job('refresh_assets','刷新表情包与朋友圈快照')
+            job=self._new_job('refresh_assets','刷新资源快照')
             if prepare_stickers:job.update(title='缓存所选表情资源',category='stickers')
+            elif payload.get('kind')=='favorites':job.update(title='刷新收藏资源快照',category='favorites')
         def check():
             self._check(job)
             with self.lock:
@@ -759,13 +839,22 @@ class Service:
                 check();keys_file=slot/'keys.json'
                 if not keys_file.is_file():raise ValueError('未找到当前快照的读取凭据，请重新连接微信。')
                 credentials=key.load_keys(str(keys_file))
-                targets={'emoticon/emoticon.db','sns/sns.db'}
+                targets={'emoticon/emoticon.db','sns/sns.db','favorite/favorite.db'}
+                previous_assets=Path(library.get('assets_root') or library['root'])
+                if previous_assets!=Path(library['root']):
+                    targets.update(p.relative_to(previous_assets).as_posix() for p in (previous_assets/'message').glob('media_*.db'))
+                if payload.get('kind')=='favorites':
+                    targets.update(name.replace('\\','/') for name in credentials if re.fullmatch(r'message[/\\]media_\d+\.db',name))
                 selected={name:value for name,value in credentials.items() if name.replace('\\','/') in targets}
-                if not selected:raise ValueError('当前微信归档尚无表情或朋友圈读取凭据，请重新连接并整理微信。')
+                if not selected:raise ValueError('当前归档尚无资源库读取凭据，请重新连接并整理微信。')
+                if payload.get('kind')=='favorites' and not any(name.replace('\\','/')=='favorite/favorite.db' for name in selected):
+                    raise ValueError('尚无收藏库读取凭据。请先在微信打开“收藏”，再重新连接并整理微信。')
                 self._update(job,progress=15,detail='正在复制并整理最新资源数据库…')
                 result=decrypt.decrypt_all(selected,str(Path(library['account_dir'])/'db_storage'),str(destination),cancel=check)
                 check();ok={name.replace('\\','/') for name in result['ok']}
                 if not ok:raise ValueError('资源快照未能更新，微信凭据可能已变化。请重新连接并整理微信。')
+                if payload.get('kind')=='favorites' and 'favorite/favorite.db' not in ok:
+                    raise ValueError('收藏快照未能更新。请保持微信登录并打开“收藏”，再重新连接并整理微信。')
                 for relative in targets:
                     target=destination/relative
                     if relative not in ok:
@@ -773,7 +862,7 @@ class Service:
                         source=Path(library.get('assets_root') or library['root'])/relative
                         if source.is_file():target.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,target)
                 candidate={**library,'assets_root':str(destination)}
-                for relative,table in [('emoticon/emoticon.db','kNonStoreEmoticonTable'),('sns/sns.db','SnsTimeLine')]:
+                for relative,table in [('emoticon/emoticon.db','kNonStoreEmoticonTable'),('sns/sns.db','SnsTimeLine'),('favorite/favorite.db','fav_db_item')]:
                     con=open_asset_db(candidate,relative)
                     if con is not None:
                         try:
@@ -805,21 +894,22 @@ class Service:
 
     def export_account(self,payload):
         from .account_exporting import export_stickers,export_moments
+        from .favorites import export_favorites
         from .account_assets import moment_selection
         kind=payload.get('kind')
-        if kind not in ('stickers','moments'):raise ValueError('不支持的资源类型')
+        if kind not in ('stickers','moments','favorites'):raise ValueError('不支持的资源类型')
         with self.lock:library=dict(self.library or {})
         if not library or library.get('demo'):raise ValueError('请先连接真实微信账号。')
         options={key:value for key,value in payload.items() if not key.startswith('archive')};options['_theme']=self.export_theme()
         packaging,password=export_options(self.config.get('archive_options'),payload)
         source_bytes=storage.source_database_bytes(library)
-        if kind=='moments':
+        if kind in ('moments','favorites'):
             dates=options_from({k:payload[k] for k in ('start','end') if k in payload});options.update(_start=dates.get('start'),_end=dates.get('end'))
         with self.read_archive(library) as archive:
             profile=archive.profile()
             selection=moment_selection(payload,profile['wxid'],archive.data.contacts) if kind=='moments' else None
             if selection:options.update(scope=selection['scope'],authorId=selection['author_id'])
-        label='表情包' if kind=='stickers' else selection['label'];title=profile['name']+' · '+label
+        label='表情包' if kind=='stickers' else '收藏' if kind=='favorites' else selection['label'];title=profile['name']+' · '+label
         output=Path(self.config['export_dir']).resolve()
         with self.lock:
             previous=self.config.get('archive_options')
@@ -839,14 +929,14 @@ class Service:
                     self._check(job)
                     self._update(job,count=count,progress=min(95,int(count*95/total)) if total else 20,
                                  detail='正在导出%s · %s%s'%(label,count,('/'+str(total)) if total else ''))
-                exporter=export_stickers if kind=='stickers' else export_moments
+                exporter={'stickers':export_stickers,'moments':export_moments,'favorites':export_favorites}[kind]
                 result=exporter(archive,library,options,staging,self.assets,progress,lambda:self._check(job),lambda msg:self._update(job,detail=msg))
                 self._check(job)
                 folder,sizes=self._finish_export_files(job,result,staging,output,folder_name,packaging,password,source_bytes)
                 self._update(job,folder=str(folder),files=[result],count=result['count'],resource_summary=result['resource_summary'],
                              size_info=sizes,compressed=bool(packaging.get('zip')),encrypted=bool(packaging.get('encrypt')),
                              start_time=result.get('start_time'),end_time=result.get('end_time'),
-                             detail='已保存 %s %s'%(result['count'],'张表情记录' if kind=='stickers' else '条朋友圈'))
+                             detail='已保存 %s %s'%(result['count'],{'stickers':'张表情记录','moments':'条朋友圈','favorites':'条收藏'}[kind]))
             finally:
                 if archive:archive.close()
                 if staging.exists() and staging.resolve().parent==output and staging.name=='.partial_'+job['id']:
@@ -863,7 +953,7 @@ class Service:
     def delete_tasks(self,payload):
         """Remove history only. Active jobs and every exported file stay intact."""
         category=payload.get('category','all')
-        if category not in ('all','sessions','moments','stickers'):raise ValueError('任务分类无效')
+        if category not in ('all','sessions','moments','stickers','favorites'):raise ValueError('任务分类无效')
         clear=payload.get('clear',False);ids=payload.get('ids')
         if not isinstance(clear,bool) or clear and ids is not None:raise ValueError('清理任务选项无效')
         if not clear and (not isinstance(ids,list) or not ids or len(ids)>80 or any(not isinstance(v,str) for v in ids)):
@@ -902,6 +992,12 @@ class Service:
 
     def settings(self, payload):
         preference=session_sort(payload['session_sort']) if 'session_sort' in payload else None
+        if 'storage_limit_gb' in payload and not storage.valid_limit(payload['storage_limit_gb']):
+            raise ValueError('缓存上限选项无效')
+        if 'storage_limit_help_hidden' in payload and not isinstance(payload['storage_limit_help_hidden'],bool):
+            raise ValueError('缓存说明显示选项无效')
+        if 'image_recovery_skip_help' in payload and not isinstance(payload['image_recovery_skip_help'],bool):
+            raise ValueError('图片恢复提示选项无效')
         with self.lock:
             theme=payload.get('theme');accent=payload.get('accent')
             if accent is not None and (not isinstance(accent,str) or accent not in ACCENT_IDS):raise ValueError('主题色不受支持')
@@ -909,6 +1005,9 @@ class Service:
             if theme in ('light','dark'):self.config['theme']=theme
             if accent is not None:self.config['accent']=accent
             if preference is not None:self.config['session_sort']=preference
+            if 'image_recovery_skip_help' in payload:self.config['image_recovery_skip_help']=payload['image_recovery_skip_help']
+            if 'storage_limit_gb' in payload:self.config['storage_limit_gb']=payload['storage_limit_gb']
+            if 'storage_limit_help_hidden' in payload:self.config['storage_limit_help_hidden']=payload['storage_limit_help_hidden']
             try:
                 self.save()
             except BaseException:
@@ -929,6 +1028,50 @@ class Service:
                     raise
                 current = updated
             return public_options(current)
+
+    def _schedule_storage_check(self, delay):
+        with self.lock:
+            if self._closed:
+                return
+            self._storage_timer = threading.Timer(delay, self._queue_storage_check)
+            self._storage_timer.daemon = True
+            self._storage_timer.start()
+
+    def _queue_storage_check(self):
+        with self.lock:
+            self._storage_timer = None
+            if self._closed or self._updating or self.storage_warning or not self.config['storage_limit_gb']:
+                return
+            if self._maintenance or self._cache_readers or any(t['status'] in ('running','queued') for t in self.config['tasks']):
+                self._schedule_storage_check(5)
+                return
+            self._maintenance = True
+            try:
+                self.pool.submit(self._check_storage_limit)
+            except RuntimeError:
+                self._maintenance = False
+
+    def _check_storage_limit(self):
+        job = None
+        def check():
+            if self._closed or self._updating:
+                raise Cancelled()
+        try:
+            check()
+            total = storage.storage_info(self, check)['bytes']
+            limit = self._startup_storage_limit * 1024**3
+            with self.lock:
+                check()
+                # Turning the cap off also cancels an outstanding startup check.
+                if not self.config['storage_limit_gb'] or total <= limit:
+                    return
+                job = self._new_job('storage_cleanup', '自动清理过期快照与缓存')
+            self._run(job, lambda: storage.cleanup(self, job, limit_bytes=limit, total_bytes=total))
+        except Cancelled:
+            pass
+        finally:
+            if job is None:
+                with self.lock:self._maintenance = False
 
     def storage_job(self, kind, directory=None):
         with self.lock:
@@ -967,18 +1110,17 @@ class Service:
 
     def asset_tutorial(self,payload,mark=False):
         kind=payload.get('kind')
-        if kind not in ('app','moments','stickers'):raise ValueError('新手教程类型无效')
+        if kind not in ('app','moments','stickers','favorites'):raise ValueError('新手教程类型无效')
         with self.lock:
-            target=self.config if kind=='app' else self.config['asset_tutorials']
-            key='app_onboarding_seen' if kind=='app' else kind
-            seen=target[key]
-            if mark and not seen:
-                target[key]=True
+            target=self.config['tutorials_seen']
+            previous=target[kind]
+            if mark and previous!=TUTORIAL_REVISION:
+                target[kind]=TUTORIAL_REVISION
                 try:self.save()
                 except OSError:
-                    target[key]=False
+                    target[kind]=previous
                     raise ValueError('教程显示记录未能保存，请检查软件数据目录的写入权限。') from None
-            return {'seen':target[key]}
+            return {'seen':target[kind]==TUTORIAL_REVISION}
 
     def call(self, action, payload):
         handlers={'state':self.state, 'demo':self.demo, 'return_from_demo':self.return_from_demo,'detect':self.detect,
@@ -994,6 +1136,7 @@ class Service:
                   'connect':lambda:self.connect(payload.get('accountId')),
                   'export':lambda:self.export(payload),
                   'account_assets':lambda:self.account_assets(payload),
+                  'favorite_preview':lambda:self.favorite_preview(payload),
                   'refresh_assets':lambda:self.refresh_assets(payload),'export_account':lambda:self.export_account(payload),
                   'recover_images':self.recover_images,
                   'cancel':lambda:self.cancel(payload.get('id')),
@@ -1016,6 +1159,9 @@ class Service:
             if self._closed:
                 return
             self._closed=True
+            if self._storage_timer is not None:
+                self._storage_timer.cancel()
+                self._storage_timer = None
             self.online.close()
             for event in self.events.values(): event.set()
             self.pool.shutdown(wait=False,cancel_futures=True)

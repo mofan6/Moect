@@ -26,7 +26,7 @@ def run(window, directory, app):
         ('export-dialog',"document.querySelector('[role=dialog]')?.textContent.includes('配置就绪')",lambda:capture('04-export-dialog')),
         ('create-export',"[...document.querySelectorAll('button')].find(b=>b.textContent==='开始批量导出').click();true",None),
         ('job-completed',"window.__wce.state.tasks.some(t=>t.kind==='export'&&t.status==='completed')",lambda:capture('05-tasks')),
-        ('theme',"document.querySelector('[title=切换主题]').click();true",None),
+        ('theme',"document.querySelector('[title=切换亮暗]').click();true",None),
         ('dark-mode',"document.documentElement.classList.contains('dark')",lambda:capture('06-dark')),
         ('about',"window.__wce.setTab('about');true",None),
         ('about-rendered',"document.body.textContent.includes('GPL-3.0')",lambda:capture('07-about')),

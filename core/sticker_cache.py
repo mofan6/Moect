@@ -16,6 +16,8 @@ from Cryptodome.Util.Padding import unpad
 from .account_assets import HASH,text
 from .media_codec import image_prefix,encrypted_media_variants
 from .paths import app_data_root
+from .game_emojis import game_image
+from wx4.game_emojis import from_hash
 
 
 def derive_emoticon_key(seed,wxid):return hashlib.md5((str(seed)+wxid+'EMOTICON').encode()).digest()
@@ -143,6 +145,10 @@ class StickerCache:
     def local(self,member,thumbnail=False):
         digest=member['md5']
         if not HASH.fullmatch(digest):return None
+        game=from_hash(digest)
+        if game:
+            image=game_image(game)
+            if image:return image
         metadata=member.get('metadata') or {};keys=[text(metadata.get('aes_key'))]
         kind='Thumb' if thumbnail else 'Persist'
         candidates=[self.base/kind/digest[:2]/(digest+('.thumb' if thumbnail else ''))]

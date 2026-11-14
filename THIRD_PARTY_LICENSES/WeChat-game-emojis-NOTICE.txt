@@ -1,0 +1,17 @@
+WeChat built-in dice and rock-paper-scissors result artwork
+
+Artwork copyright belongs to Tencent and its respective rights holders.
+Moect is not affiliated with or endorsed by Tencent.
+
+The nine original PNG result sprites are bundled without modifying their bytes.
+They represent the final result, not a newly generated or randomized animation.
+Their original WeChat MD5 identities were checked against local message records;
+SHA-256 fingerprints are recorded in ui/wechat-game-emojis.json.
+
+Historical cache mirror (only the nine known built-in sprites were retrieved):
+https://github.com/cxun/WeChatHistory/tree/5fd91e861349c2a82556fb0ee4065c10ea0019d1/Source/WechatHistory/emoticon1
+
+Format cross-references (no injection, sending, or game-result-changing code is
+included or used):
+https://github.com/espaja/bull_niu_statistics/blob/cf9c7dab3d870452289e950d8b8bafde558ee837/src/dice_parser.py
+https://github.com/Johnny520/wcx/blob/81e775e993b6e1416599c10af8aea63c21b26045/app/src/main/java/h/Hchat/hooks/items/gameemoji/GameEmojiFeature.kt

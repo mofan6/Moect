@@ -7,22 +7,25 @@ import {call} from '@/src/native'
 // Shared native-resolution promises prevent repeat requests on page switches.
 const resolvedAvatars=new Map<string,Promise<string>>()
 function resolveAvatar(src:string){
-  if(!/^https?:/i.test(src))return Promise.resolve(src)
+  if(!/^(?:https?:|moect-avatar:)/i.test(src))return Promise.resolve(src)
   if(!resolvedAvatars.has(src)){
-    if(resolvedAvatars.size>=2048)resolvedAvatars.clear()
+    if(resolvedAvatars.size>=128)resolvedAvatars.delete(resolvedAvatars.keys().next().value!)
     resolvedAvatars.set(src,call('avatar',{url:src}).then(r=>r.url||'').catch(()=>''))
   }
-  return resolvedAvatars.get(src)!
+  const pending=resolvedAvatars.get(src)!;resolvedAvatars.delete(src);resolvedAvatars.set(src,pending)
+  return pending
 }
 
 interface AvatarContextValue {
   imageLoaded: boolean
   setImageLoaded: (loaded: boolean) => void
+  element: React.RefObject<HTMLDivElement|null>
 }
 
 const AvatarContext = React.createContext<AvatarContextValue>({
   imageLoaded: false,
   setImageLoaded: () => {},
+  element: {current:null},
 })
 
 const Avatar = React.forwardRef<
@@ -30,11 +33,12 @@ const Avatar = React.forwardRef<
   React.HTMLAttributes<HTMLDivElement>
 >(({ className, ...props }, ref) => {
   const [imageLoaded, setImageLoaded] = React.useState(false)
+  const element=React.useRef<HTMLDivElement>(null)
   
   return (
-    <AvatarContext.Provider value={{ imageLoaded, setImageLoaded }}>
+    <AvatarContext.Provider value={{ imageLoaded, setImageLoaded,element }}>
       <div
-        ref={ref}
+        ref={node=>{element.current=node;if(typeof ref==='function')ref(node);else if(ref)ref.current=node}}
         className={cn(
           "relative flex h-10 w-10 shrink-0 overflow-hidden rounded-full",
           className
@@ -50,13 +54,18 @@ const AvatarImage = React.forwardRef<
   HTMLImageElement,
   React.ImgHTMLAttributes<HTMLImageElement>
 >(({ className, onLoad, onError, src, ...props }, ref) => {
-  const { setImageLoaded } = React.useContext(AvatarContext)
+  const { setImageLoaded,element } = React.useContext(AvatarContext)
   const [localSrc,setLocalSrc]=React.useState('')
   React.useEffect(()=>{
     let current=true
     setLocalSrc('');setImageLoaded(false)
-    if(src)resolveAvatar(src).then(url=>{if(current)setLocalSrc(url)})
-    return()=>{current=false}
+    const start=()=>{if(src&&current)resolveAvatar(src).then(url=>{if(current)setLocalSrc(url)})}
+    let observer:IntersectionObserver|undefined
+    if(src&&/^(?:https?:|moect-avatar:)/i.test(src)&&element.current){
+      observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)){observer?.disconnect();start()}},{rootMargin:'120px'})
+      observer.observe(element.current)
+    }else start()
+    return()=>{current=false;observer?.disconnect()}
   },[src])
   if(!localSrc)return null
   

@@ -31,11 +31,11 @@ class StartupTutorialUiTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.browser.close();cls.playwright.stop();cls.server.shutdown();cls.server.server_close();cls.thread.join()
 
-    def page(self,seen=False,saved_account=True,online=None,images=None,read_remaining=0):
-        context=self.browser.new_context(viewport={'width':1080,'height':800},reduced_motion='reduce')
+    def page(self,seen=False,saved_account=True,online=None,images=None,read_remaining=0,assets_seen=True,reduced_motion='reduce',app_tutorial_delay=0):
+        context=self.browser.new_context(viewport={'width':1080,'height':800},reduced_motion=reduced_motion)
         self.addCleanup(context.close)
         page=context.new_page()
-        fixture={'seen':seen,'saved_account':saved_account,'online':online,'images':images or {},'read_remaining':read_remaining}
+        fixture={'seen':seen,'saved_account':saved_account,'online':online,'images':images or {},'read_remaining':read_remaining,'assets_seen':assets_seen,'app_tutorial_delay':app_tutorial_delay}
         page.add_init_script('window.__fixture='+json.dumps(fixture)+r''';
           window.__calls=[];
           window.__imageCalls=[];
@@ -44,13 +44,15 @@ class StartupTutorialUiTests(unittest.TestCase):
             library:window.__fixture.saved_account?{name:'Synthetic saved account',profile:{},live:true,demo:false}:null};
           window.pywebview={api:{invoke:async(action,payload={})=>{
             window.__calls.push(action);
+            if(action==='tutorial_status'&&payload.kind==='app'&&window.__fixture.app_tutorial_delay)
+              await new Promise(resolve=>setTimeout(resolve,window.__fixture.app_tutorial_delay));
             let result={ok:true};
             if(action==='state'){
               // An unrelated task completes while the first-run tutorial is open.
               const completed=window.__calls.filter(v=>v==='state').length>1;
               result={...state,tasks:[{id:'synthetic-export',kind:'export',status:completed?'completed':'running',title:'Synthetic export',detail:'Synthetic task finished',created_at:'2026-01-01'}]};
-            }else if(action==='tutorial_status')result={seen:payload.kind!=='app'||window.__fixture.seen||localStorage.getItem('synthetic-tutorial')==='seen'};
-            else if(action==='tutorial_seen'){localStorage.setItem('synthetic-tutorial','seen');result={seen:true};}
+            }else if(action==='tutorial_status')result={seen:(payload.kind==='app'?window.__fixture.seen:window.__fixture.assets_seen)||localStorage.getItem('synthetic-tutorial-'+payload.kind)==='seen'};
+            else if(action==='tutorial_seen'){localStorage.setItem('synthetic-tutorial-'+payload.kind,'seen');result={seen:true};}
             else if(action==='sessions'){await new Promise(resolve=>setTimeout(resolve,100));result=[];}
             else if(action==='startup_reconnect')result=window.__fixture.seen?{job:'synthetic-reconnect'}:{skipped:true};
             else if(action==='online_status'||action==='online_check')result=online;
@@ -76,7 +78,7 @@ class StartupTutorialUiTests(unittest.TestCase):
         page.locator('#synthetic-close').click(force=True)
         self.assertTrue(page.locator('.app-onboarding').is_visible())
         next_button=page.locator('.onboarding-next');next_button.click()
-        page.wait_for_function("()=>document.querySelector('.onboarding-kicker')?.textContent.includes('01 / 连接微信')")
+        page.wait_for_function("()=>document.querySelector('.onboarding-kicker')?.textContent.includes('02 / 导出聊天')")
         self.assertEqual(page.locator('[data-qce-toaster]').count(),0)
 
     def test_clean_and_inherited_first_launch_stay_manual_after_finishing_or_reloading_tutorial(self):
@@ -103,6 +105,82 @@ class StartupTutorialUiTests(unittest.TestCase):
         page.get_by_role('button',name='重新播放入门教程',exact=True).click()
         self.assert_tutorial_keeps_control(page)
         self.assertEqual(page.evaluate("window.__calls.filter(v=>v==='startup_reconnect').length"),1)
+
+    def test_resource_tutorial_waits_for_startup_decision_without_marking_an_unseen_page(self):
+        page=self.page(saved_account=False,assets_seen=False,app_tutorial_delay=700)
+        page.evaluate("window.__wce.setTab('moments')")
+        page.wait_for_selector('.app-onboarding')
+        self.assertEqual(page.locator('.asset-tutorial').count(),0)
+        self.assertIsNone(page.evaluate("localStorage.getItem('synthetic-tutorial-moments')"))
+        page.locator('.onboarding-skip').click()
+        page.wait_for_selector('.app-onboarding',state='detached')
+        page.wait_for_selector('.asset-tutorial')
+        self.assertEqual(page.evaluate("localStorage.getItem('synthetic-tutorial-moments')"),'seen')
+
+    def test_new_guide_covers_button_roles_and_page_guides_show_once_with_replay(self):
+        page=self.page(saved_account=True,assets_seen=False)
+        page.set_viewport_size({'width':1062,'height':720})
+        page.wait_for_selector('.app-onboarding')
+        for index in range(5):
+            page.wait_for_function('(n)=>document.querySelector(".onboarding-kicker")?.textContent.startsWith(String(n+1).padStart(2,"0"))',arg=index)
+            page.wait_for_function('()=>Number(getComputedStyle(document.querySelector(".onboarding-slide")).opacity)===1')
+            self.assertFalse(page.locator('.onboarding-slide').evaluate('el=>el.scrollWidth>el.clientWidth'))
+            button=page.locator('.onboarding-next').bounding_box()
+            self.assertLessEqual(button['y']+button['height'],720)
+            if index==2:
+                guide=page.locator('.onboarding-scene .tutorial-button-guide')
+                for name in ('重新连接并整理','刷新资源快照','恢复图片读取'):
+                    self.assertEqual(guide.get_by_role('heading',name=name,exact=True).count(),1)
+            page.locator('.onboarding-next').click()
+        page.wait_for_selector('.app-onboarding',state='detached')
+        self.assertNotIn('startup_reconnect',page.evaluate('window.__calls'))
+        for kind in ('moments','stickers'):
+            page.evaluate('(kind)=>window.__wce.setTab(kind)',kind)
+            tutorial=page.locator('.asset-tutorial');tutorial.wait_for()
+            for name in ('刷新资源快照','缓存所选表情资源' if kind=='stickers' else '恢复图片读取'):
+                self.assertEqual(tutorial.locator('.tutorial-button-guide').get_by_role('heading',name=name,exact=True).count(),1)
+            if kind=='stickers':self.assertNotIn('恢复图片读取',tutorial.inner_text())
+            self.assertEqual(page.locator('[data-qce-toaster]').count(),0)
+            self.assertFalse(page.locator('.tutorial-main').evaluate('el=>el.scrollHeight>el.clientHeight+1'))
+            tutorial.get_by_role('button',name='知道了',exact=True).click()
+            tutorial.wait_for(state='detached')
+            page.evaluate("window.__wce.setTab('overview')")
+            page.wait_for_selector('.asset-page',state='detached')
+            page.evaluate('(kind)=>window.__wce.setTab(kind)',kind)
+            page.wait_for_selector('.asset-page')
+            self.assertEqual(tutorial.count(),0)
+            page.get_by_role('button',name='新手教程',exact=True).click()
+            tutorial.wait_for()
+            tutorial.get_by_role('button',name='关闭教程',exact=True).click()
+            tutorial.wait_for(state='detached')
+        page.reload();page.wait_for_function('()=>window.__ready===true')
+        self.assertEqual(page.locator('.app-onboarding').count(),0)
+
+    def test_page_guide_defers_announcements_until_closed(self):
+        online=self.online(notices=False)
+        page=self.page(seen=True,saved_account=False,online=online,assets_seen=False)
+        page.evaluate("window.__wce.setTab('moments')")
+        page.wait_for_selector('.asset-tutorial')
+        page.evaluate('''()=>{const online=window.__fixture.online;
+          online.announcements=[{id:'during-tutorial',title:'Synthetic notice',body:'Synthetic body',published_at:'2026-01-01',read:false}];
+          online.unread_count=1;online.revision++;}''')
+        page.wait_for_function('()=>window.__wce.state.online.revision===2')
+        self.assertEqual(page.locator('.notice-dialog').count(),0)
+        page.locator('.asset-tutorial').get_by_role('button',name='知道了',exact=True).click()
+        page.wait_for_selector('.notice-dialog')
+
+    def test_animated_page_changes_do_not_create_a_horizontal_scrollbar(self):
+        page=self.page(reduced_motion='no-preference')
+        page.wait_for_selector('.app-onboarding')
+        for selector in ('.onboarding-next','.onboarding-prev'):
+            page.locator(selector).click()
+            samples=page.evaluate('''async()=>{const samples=[],end=performance.now()+650;
+              while(performance.now()<end){await new Promise(requestAnimationFrame);
+                const stage=document.querySelector('.onboarding-stage');
+                samples.push({gutter:stage.offsetHeight-stage.clientHeight,transform:getComputedStyle(stage.querySelector('.onboarding-slide')).transform});}
+              return samples;}''')
+            self.assertTrue(any(row['transform'] not in ('none','matrix(1, 0, 0, 1, 0, 0)') for row in samples))
+            self.assertTrue(all(row['gutter']==0 for row in samples),samples)
 
     def online(self,newer=True,notices=False):
         notice={'id':'synthetic-notice','title':'Synthetic announcement','body':'A synthetic announcement.','published_at':'2026-01-01T00:00:00Z','read':False}

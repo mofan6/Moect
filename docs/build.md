@@ -24,9 +24,9 @@ python scripts/package_release.py .\release --no-source
 
 ## 发布
 
-GitHub 版本标签应指向与二进制对应的源码提交。安装包与便携版发布到 Release，源码可通过该标签获取；公开的 SHA256SUMS.txt 只列出公开发行附件。
+GitHub 版本标签应指向与二进制对应的源码提交。Release 默认只发布安装包与便携版，源码可通过该标签获取。本地构建仍生成校验文件，供发布前核对。
 
-`scripts/publish_release.py` 使用本机已配置的 GitHub 凭据完成草稿、上传校验和正式发布，不把凭据写入仓库。其发布参数只接受安装包、便携 ZIP 与公开校验文件。内置公告/更新服务由独立的签名发布通道管理，详见 [公告与更新](announcements-updates.md)。
+`scripts/publish_release.py` 使用本机已配置的 GitHub 凭据完成草稿、上传校验和正式发布，不把凭据写入仓库。每份附件上传后校验大小和 SHA-256；只有显式传入 `--checksums` 时才附带公开校验文件。内置公告/更新服务由独立的签名发布通道管理，详见 [公告与更新](announcements-updates.md)。
 
 ## 可选作者工具
 

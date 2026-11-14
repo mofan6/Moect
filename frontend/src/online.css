@@ -1,8 +1,44 @@
+.sidebar-footer { padding-inline: 24px; }
+.sidebar-links {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2,minmax(0,1fr));
+  gap: 8px;
+  padding-block: 4px;
+}
+.sidebar-links::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1px;
+  height: 14px;
+  border-radius: 1px;
+  background: var(--primary);
+  opacity: .6;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.sidebar-links button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  height: 32px;
+  padding: 0 4px;
+  border-radius: 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  white-space: nowrap;
+  transition: background .2s, color .2s;
+}
+.sidebar-links button:is(:hover,:focus-visible) { background: var(--accent); color: var(--primary); }
 .sidebar-actions {
   display: grid;
-  grid-template-columns: repeat(3,minmax(0,1fr));
+  grid-template-columns: repeat(3,36px);
   align-items: center;
-  padding: 4px;
+  justify-content: space-between;
+  padding: 4px 0;
 }
 .sidebar-actions #sidebar-online, .online-shortcuts { display: contents; }
 .online-update-shortcut { grid-column: 1; }

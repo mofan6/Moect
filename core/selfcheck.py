@@ -2,9 +2,13 @@
 import json
 import math
 import struct
+import sqlite3
+import sys
 import tempfile
 import wave
+from contextlib import closing
 from pathlib import Path
+from types import SimpleNamespace
 
 from .version import VERSION
 
@@ -42,6 +46,30 @@ def run(report):
             audio = MediaCodec(lambda: None).audio(silk, root/'voice.wav')
             with wave.open(str(audio), 'rb') as stream:
                 result['checks']['silk_wav'] = stream.getnframes() == 480
+            # Exercise the actual frozen favorite exporter and its new template;
+            # importing successfully alone cannot catch omitted HTML assets.
+            from .favorites import export_favorites
+            base=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parents[1]))
+            snapshot=root/'收藏快照';database=snapshot/'favorite/favorite.db';database.parent.mkdir(parents=True)
+            with closing(sqlite3.connect(database)) as con,con:
+                con.execute('CREATE TABLE fav_db_item(local_id INTEGER,type INTEGER,flag INTEGER,update_time INTEGER,content TEXT,fromusr TEXT,realchatname TEXT)')
+                con.execute('INSERT INTO fav_db_item VALUES (1,1,0,1800000000,?,?,?)',
+                            ('<favitem><desc>Synthetic 收藏 [微笑]</desc></favitem>','',''))
+            account=root/'synthetic-account'
+            data=SimpleNamespace(root=str(snapshot),wxid='synthetic',cache_root=str(root),
+                                 account_dir=lambda:str(account),name_of=lambda uid:uid)
+            archive=SimpleNamespace(data=data,profile=lambda:{'name':'Synthetic','wxid':'synthetic'})
+            output=root/'收藏导出';output.mkdir()
+            exported=export_favorites(archive,{'root':str(snapshot),'account_dir':str(account)},
+                {'articles':False},output,base/'ui',lambda *_:None,lambda:None,lambda _:None)
+            result['checks']['favorites_export']=(exported['count']==1 and (output/'index.html').is_file()
+                and len(list((output/'Markdown').glob('*.md')))==1 and (output/'builtin-faces.js').is_file())
+            result['checks']['fonts']=all(any((base/'ui-qce/assets').glob('HarmonyOS_Sans_SC_'+weight+'-*.ttf'))
+                                        for weight in ('Regular','Medium'))
+            from .game_emojis import game_image
+            from wx4.game_emojis import result as game_result
+            result['checks']['game_emojis']=all(game_image(game_result(kind,number)) for kind,count in (('dice',6),('rps',3))
+                                                   for number in range(1,count+1))
         result['ok'] = all(result['checks'].values())
     except Exception as error:
         result.update(ok=False, error=type(error).__name__ + ': ' + str(error))

@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT))
 from core.version import VERSION  # noqa: E402
 
-PORTABLE_EXCLUDED={'使用说明.md','修复说明.md'}
+PORTABLE_EXCLUDED={'使用说明.md','修复说明.md','THIRD_PARTY_NOTICES.md'}
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
@@ -21,6 +21,8 @@ def main():
     output.mkdir(parents=True,exist_ok=True)
     runtime=ROOT/'dist/Moect'
     if not (runtime/'Moect.exe').is_file():raise SystemExit('Build the runtime first.')
+    if not (runtime/'_internal/THIRD_PARTY_LICENSES/Moect-NOTICES.txt').is_file():
+        raise SystemExit('Rebuild the runtime with the consolidated license notices first.')
     installer=output/f'Moect-{VERSION}-Setup-x64.exe'
     if not installer.is_file():raise SystemExit('Build the installer first.')
     portable=output/f'Moect-{VERSION}-Windows-x64.zip'
@@ -28,8 +30,7 @@ def main():
         for path in sorted(runtime.rglob('*')):
             if path.is_file() and path.name not in PORTABLE_EXCLUDED:
                 archive.write(path,'Moect/'+path.relative_to(runtime).as_posix())
-        for source,target in [('LICENSE','LICENSE'),('THIRD_PARTY_NOTICES.md','THIRD_PARTY_NOTICES.md')]:
-            archive.write(ROOT/source,'Moect/'+target)
+        archive.write(ROOT/'LICENSE','Moect/LICENSE')
     packages=[installer,portable]
     if not args.no_source:
         source=output/f'Moect-{VERSION}-Source.zip'

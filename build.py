@@ -39,12 +39,15 @@ subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--win
                '--version-file',str(version_file),
                '--add-data','ui-qce;ui-qce','--add-data','ui/viewer.html;ui',
                '--add-data','ui/collection.html;ui',
+               '--add-data','ui/favorites.html;ui',
                '--add-data','ui/date-range-picker.js;ui',
                '--add-data','ui/archive-print.js;ui',
                '--add-data','ui/archive-media.js;ui',
                '--add-data','ui/inline-faces.js;ui',
                '--add-data','ui/wechat-faces.json;ui',
                '--add-data','ui/wechat-faces;ui/wechat-faces',
+               '--add-data','ui/wechat-game-emojis.json;ui',
+               '--add-data','ui/wechat-game-emojis;ui/wechat-game-emojis',
                '--add-data','ui/online-config.json;ui',
                '--add-data','LICENSE;.','--add-data','THIRD_PARTY_NOTICES.md;.',
                '--add-data','THIRD_PARTY_LICENSES;THIRD_PARTY_LICENSES',
@@ -68,5 +71,7 @@ subprocess.run([sys.executable,'-m','PyInstaller','--noconfirm','--clean','--win
     '--add-data',str(root/'ui/online-config.json')+';ui','--exclude-module','PySide6','--exclude-module','webview',
     str(root/'updater.py')],cwd=root,env=env,check=True)
 destination=root/'dist/Moect';shutil.copy2(root/'build-support/updater/MoectUpdater.exe',destination/'MoectUpdater.exe')
+# Keep the attribution with the other licenses, without a loose Markdown notice.
+(destination/'_internal/THIRD_PARTY_NOTICES.md').replace(destination/'_internal/THIRD_PARTY_LICENSES/Moect-NOTICES.txt')
 managed=sorted(p.relative_to(destination).as_posix() for p in destination.rglob('*') if p.is_file() and p.name!='program-files.json')
 (destination/'program-files.json').write_text(json.dumps({'version':VERSION,'files':managed},ensure_ascii=False,indent=2),encoding='utf-8')

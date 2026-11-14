@@ -90,6 +90,10 @@ export function BatchExportDialog({ open, onOpenChange, items, onExport }: Batch
   const [dateError, setDateError] = useState<string | null>(null)
   const [isExporting, setIsExporting] = useState(false)
   
+  const [itemsPage,setItemsPage]=useState(0)
+  const itemPages=Math.max(1,Math.ceil(items.length/100)),itemPage=Math.min(itemsPage,itemPages-1)
+  const itemRows=items.slice(itemPage*100,itemPage*100+100).map((item,index)=>({item,index:itemPage*100+index}))
+  useEffect(()=>{setItemsPage(0)},[open,items.length])
   const [includeSystemMessages, setIncludeSystemMessages] = useState(true)
   const [quickExport, setQuickExport] = useState(false)
   const [includeAvatars, setIncludeAvatars] = useState(true)
@@ -243,7 +247,7 @@ export function BatchExportDialog({ open, onOpenChange, items, onExport }: Batch
             <div className="flex-1 overflow-hidden">
               <ScrollArea className="h-full rounded-2xl p-2 bg-black/[0.02] dark:bg-white/[0.03]">
                 <div className="space-y-1">
-                  {items.map((item, idx) => (
+                  {itemRows.map(({item,index:idx}) => (
                     <div 
                       key={`${item.type}_${item.id}`} 
                       className={[
@@ -291,6 +295,7 @@ export function BatchExportDialog({ open, onOpenChange, items, onExport }: Batch
                 </div>
               </ScrollArea>
             </div>
+            {itemPages>1&&<div role="group" aria-label="所选会话分页" className="mt-3 flex items-center justify-between gap-2 text-xs text-muted-foreground"><Button size="sm" variant="ghost" disabled={itemPage===0} onClick={()=>setItemsPage(itemPage-1)}>上一页</Button><span>{itemPage+1} / {itemPages} 页</span><Button size="sm" variant="ghost" disabled={itemPage+1===itemPages} onClick={()=>setItemsPage(itemPage+1)}>下一页</Button></div>}
           </div>
 
           {/* 右侧 - 配置选项 */}
@@ -453,7 +458,7 @@ export function BatchExportDialog({ open, onOpenChange, items, onExport }: Batch
               {isExporting ? '导出中...' : progress.status === 'completed' ? '关闭' : '取消'}
             </Button>
             {progress.status !== 'completed' && (
-              <Button onClick={handleExport} disabled={isExporting || (timeRange === 'custom' && (!customStartDate || !customEndDate || !!dateError))} className="rounded-full text-[13px] h-8 px-6 bg-primary text-primary-foreground hover:bg-primary/90">
+              <Button onClick={handleExport} disabled={!packaging.loaded || isExporting || (timeRange === 'custom' && (!customStartDate || !customEndDate || !!dateError))} className="rounded-full text-[13px] h-8 px-6 bg-primary text-primary-foreground hover:bg-primary/90">
                 {isExporting ? '导出中...' : '开始批量导出'}
               </Button>
             )}

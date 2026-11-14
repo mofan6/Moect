@@ -94,7 +94,7 @@ class ExportPreferenceTests(unittest.TestCase):
         original=list(self.archive.messages(SESSION))
         voice=dict(original[0],server_id='voice',kind='voice',text='[语音]')
         file=next(row for row in original if row['server_id']=='14')
-        with patch.object(self.archive,'messages',side_effect=lambda *a,**k:iter([voice,file])),patch.object(self.archive.data,'voice_blob',side_effect=AssertionError('Voice blob must not be read')),patch.object(ResourceStore,'_candidates',side_effect=AssertionError('File lookup must be skipped')):
+        with patch.object(self.archive,'messages',side_effect=lambda *a,**k:iter([voice,file])),patch.object(self.archive.data,'voice_blobs',side_effect=AssertionError('Voice blob must not be read')),patch.object(ResourceStore,'_candidates',side_effect=AssertionError('File lookup must be skipped')):
             rows=json_rows(self.export({'skipDownloadResourceTypes':['audio','file'],'includeAvatars':False}))
         self.assertEqual(rows[1]['extra']['filename'],'fixture.pdf')
         self.assertTrue(all(row['resource_status']=='skipped' and row['resources']==[] and not row['avatar'] for row in rows))

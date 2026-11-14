@@ -38,7 +38,7 @@ class Archive:
         for row in rows:
             row['category'] = self.data.session_category(row['username'])
             row['has_messages'] = self.data.has_messages(row['username'])
-            row['avatar_url'] = self.avatars.ui(row['username'])
+            row['avatar_url'] = self.avatars.reference(row['username'])
         return [r for r in rows if r['has_messages']]
 
     def _raw(self, session, descending=False, before=None, start=None, end=None):

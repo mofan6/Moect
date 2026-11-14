@@ -10,11 +10,12 @@ import {call} from './native'
 import {AssetTutorial,useAssetTutorial} from './AssetTutorial'
 import {WeChatText} from './WeChatText'
 
-type Props={kind:'stickers'|'moments';library:any;busy:boolean;onConnect:()=>void;onExportQueued:()=>void;onRefreshQueued:()=>void}
+type Props={kind:'stickers'|'moments';library:any;busy:boolean;onConnect:()=>void;onExportQueued:()=>void;onRefreshQueued:()=>void;onRecoverImages:()=>void;onTutorialChange?:(open:boolean)=>void}
 const field='h-9 rounded-full bg-black/[0.04] dark:bg-white/[0.06] px-3 text-[13px] border-0 outline-none min-w-0'
 
-export function AccountAssetsPage({kind,library,busy,onConnect,onExportQueued,onRefreshQueued}:Props){
+export function AccountAssetsPage({kind,library,busy,onConnect,onExportQueued,onRefreshQueued,onRecoverImages,onTutorialChange}:Props){
   const tutorial=useAssetTutorial(kind)
+  useEffect(()=>{onTutorialChange?.(tutorial.open);return()=>onTutorialChange?.(false)},[tutorial.open,onTutorialChange])
   const packaging=useArchivePreferences(true)
   const [moreSettings,setMoreSettings]=useState(false)
   const [settingsSaving,setSettingsSaving]=useState(false)
@@ -36,7 +37,6 @@ export function AccountAssetsPage({kind,library,busy,onConnect,onExportQueued,on
   },[kind,library?.data_revision,library?.demo,library?.name,momentScope,authorInput,start,end,sticker])
   const count=useMemo(()=>(data?.groups||[]).filter((g:any)=>selected.has(g.id)).reduce((n:number,g:any)=>n+g.count,0),[data,selected])
   const refresh=async()=>{setSubmitting(true);try{await call('refresh_assets');toast.info('正在刷新表情包和朋友圈快照');onRefreshQueued()}catch(e){toast.error('刷新未完成',{description:(e as Error).message})}finally{setSubmitting(false)}}
-  const recoverImages=async()=>{setSubmitting(true);try{await call('recover_images');toast.info('正在恢复图片读取，可在任务页取消');onRefreshQueued()}catch(e){toast.error('恢复未完成',{description:(e as Error).message})}finally{setSubmitting(false)}}
   const cacheStickers=async()=>{setSubmitting(true);try{await call('refresh_assets',{kind:'stickers',groups:[...selected]});toast.info('正在缓存所选表情资源');onRefreshQueued()}catch(e){toast.error('缓存未完成',{description:(e as Error).message})}finally{setSubmitting(false)}}
   const exportAll=async()=>{
     if(!sticker&&start&&end&&start>end){toast.warning('结束日期不能早于开始日期');return}
@@ -57,9 +57,9 @@ export function AccountAssetsPage({kind,library,busy,onConnect,onExportQueued,on
     }
   }
   const toggle=(id:string)=>setSelected(previous=>{const result=new Set(previous);result.has(id)?result.delete(id):result.add(id);return result})
-  return <><AssetTutorial kind={kind} open={tutorial.open} onClose={tutorial.close}/><div className="p-6 space-y-6 max-w-5xl">
-    <div className="flex items-start justify-between gap-4"><div className="space-y-1.5"><h2 className="text-lg font-semibold flex items-center gap-2"><Icon className="w-5 h-5 text-primary"/>{sticker?'表情包':'朋友圈'}</h2></div>
-      <div className="flex flex-wrap items-center justify-end gap-2">{!sticker&&<Button size="sm" variant="outline" className="rounded-full" onClick={recoverImages} disabled={!library?.live||busy||submitting}><KeyRound className="w-3.5 h-3.5 mr-1.5"/>恢复图片读取</Button>}<Button size="sm" variant="ghost" className="rounded-full" onClick={tutorial.show}><BookOpen className="w-3.5 h-3.5 mr-1.5"/>新手教程</Button><Button id={kind+'-refresh-resources'} size="sm" variant="outline" className="rounded-full" onClick={refresh} disabled={!library?.live||busy||submitting}><RefreshCw className="w-3.5 h-3.5 mr-1.5"/>{busy?'正在整理':'刷新资源快照'}</Button></div>
+  return <><AssetTutorial kind={kind} open={tutorial.open} onClose={tutorial.close}/><div className="page-shell asset-page space-y-6">
+    <div className="asset-heading flex items-start justify-between gap-4"><div className="space-y-1.5"><h2 className="text-lg font-semibold flex items-center gap-2"><Icon className="w-5 h-5 text-primary"/>{sticker?'表情包':'朋友圈'}</h2></div>
+      <div className="flex flex-wrap items-center justify-end gap-2"><Button size="sm" variant="ghost" className="rounded-full" onClick={tutorial.show}><BookOpen className="w-3.5 h-3.5 mr-1.5"/>新手教程</Button>{!sticker&&<Button size="sm" variant="outline" className="rounded-full" onClick={onRecoverImages} disabled={!library?.live||busy||submitting}><KeyRound className="w-3.5 h-3.5 mr-1.5"/>恢复图片读取</Button>}<Button id={kind+'-refresh-resources'} size="sm" variant="outline" className="rounded-full" onClick={refresh} disabled={!library?.live||busy||submitting}><RefreshCw className="w-3.5 h-3.5 mr-1.5"/>{busy?'正在整理':'刷新资源快照'}</Button></div>
     </div>
     {!library||library.demo?<div className="rounded-xl bg-primary/5 p-5 space-y-3"><p className="text-sm">请先连接真实微信账号。</p><Button className="rounded-full" onClick={onConnect}>连接微信</Button></div>:<>
       {!sticker&&<div className="rounded-xl border border-border/70 p-5 space-y-4">
@@ -71,7 +71,7 @@ export function AccountAssetsPage({kind,library,busy,onConnect,onExportQueued,on
       {loading?<div className="flex items-center gap-3 py-12 text-sm text-muted-foreground"><Loader size={18}/>正在读取本机资源列表…</div>:error?<div className="rounded-xl border border-destructive/20 p-5 text-sm text-muted-foreground">{error}</div>:<>
         {!data?.available?<div className="rounded-xl border border-border/70 p-5 space-y-2"><p className="text-sm font-medium">尚无可读取的{sticker?'表情包':'朋友圈'}缓存</p><p className="text-[13px] text-muted-foreground">{sticker?'请在微信打开表情面板及相应专辑，然后刷新资源快照。':'请在微信浏览相应的朋友圈时间线或账号主页，再刷新资源快照。'}</p></div>:sticker?<>
           <div className="flex items-center justify-between"><p className="text-sm font-medium">{data.groups.length} 个分类 · 共 {data.total} 张 · 已选择 {count} 张</p><Button size="sm" variant="ghost" className="rounded-full" onClick={()=>setSelected(selected.size?new Set():new Set(data.groups.filter((g:any)=>g.count>0).map((g:any)=>g.id)))}>{selected.size?'取消全选':'全选'}</Button></div>
-          <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">{data.groups.map((group:any)=><button key={group.id} type="button" onClick={()=>toggle(group.id)} disabled={!group.count} aria-pressed={selected.has(group.id)} className={`p-4 text-left rounded-xl border transition-colors disabled:opacity-45 ${selected.has(group.id)?'bg-primary/5 border-primary/35':'border-border/70 hover:bg-accent/50'}`}>
+          <div className="sticker-category-grid">{data.groups.map((group:any)=><button key={group.id} type="button" onClick={()=>toggle(group.id)} disabled={!group.count} aria-pressed={selected.has(group.id)} className={`p-4 text-left rounded-xl border transition-colors disabled:opacity-45 ${selected.has(group.id)?'bg-primary/5 border-primary/35':'border-border/70 hover:bg-accent/50'}`}>
             <div className="flex items-center gap-2.5"><div className={`w-7 h-7 rounded-full grid place-items-center shrink-0 ${selected.has(group.id)?'bg-primary text-primary-foreground':'bg-muted text-muted-foreground'}`}>{selected.has(group.id)?<Check className="w-4 h-4"/>:<Sticker className="w-4 h-4"/>}</div><div className="min-w-0"><p className="text-[13px] font-medium truncate" title={group.name}>{group.name}</p><p className="text-xs text-muted-foreground mt-1">{group.count?group.count+' 张表情':'尚未缓存专辑成员'}</p></div></div>
           </button>)}</div>
           <label className="flex gap-2 items-center text-[13px] text-muted-foreground"><input type="checkbox" checked={download} onChange={e=>setDownload(e.target.checked)}/>尝试下载本机尚未缓存的表情资源</label>
@@ -82,7 +82,7 @@ export function AccountAssetsPage({kind,library,busy,onConnect,onExportQueued,on
             <div className="flex flex-wrap gap-5 text-[13px] text-muted-foreground"><label className="flex items-center gap-2"><input type="checkbox" checked={images} onChange={e=>setImages(e.target.checked)}/>导出图片</label><label className="flex items-center gap-2"><input type="checkbox" checked={videos} onChange={e=>setVideos(e.target.checked)}/>导出本地视频（可取消以节省空间）</label></div>
             <div className="flex flex-wrap gap-2"><Button className="rounded-full" disabled={busy||!data.count||submitting||loading||momentScope==='account'&&!authorInput.trim()} onClick={exportAll}><Download className="w-4 h-4 mr-2"/>导出所选朋友圈</Button><Button variant="outline" className="rounded-full" disabled={!packaging.loaded||submitting||busy} onClick={()=>setMoreSettings(true)}>更多设置</Button></div>
           </div>
-          {data.posts?.length>0&&<div className="space-y-3">{data.posts.map((post:any)=><div key={post.id} className="rounded-xl bg-muted/35 p-4 space-y-2"><p className="text-xs text-muted-foreground"><span className="font-medium mr-2" title={post.author}>{post.author_name||post.author}</span>{post.create_time?new Date(post.create_time*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'时间待解析'}</p>{post.thumbnails?.length>0&&<div className="grid grid-cols-3 gap-1 max-w-[330px]">{post.thumbnails.slice(0,9).map((src:string,index:number)=><img key={index} src={src} className="aspect-square w-full object-cover rounded-sm" alt="朋友圈图片" loading="lazy"/>)}</div>}{post.image_count>(post.thumbnails?.length||0)&&<p className="text-xs text-muted-foreground">{post.media_status?.includes('encrypted')?'本地图片已缓存但尚未解密，请点击上方“恢复图片读取”。':`另有 ${post.image_count-(post.thumbnails?.length||0)} 张图片未预览，可先恢复图片读取；本地未缓存的内容需在微信打开后刷新。`}</p>}<p className="text-[13px] whitespace-pre-wrap break-words [overflow-wrap:anywhere] line-clamp-4"><WeChatText text={post.text||post.title||(post.status==='unsupported'?'本条缓存结构暂未解析':'图片或视频动态')}/></p></div>)}</div>}
+          {data.posts?.length>0&&<div className="moments-preview-grid">{data.posts.map((post:any)=><div key={post.id} className="rounded-xl bg-muted/35 p-4 space-y-2"><p className="text-xs text-muted-foreground"><span className="font-medium mr-2" title={post.author}>{post.author_name||post.author}</span>{post.create_time?new Date(post.create_time*1000).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}):'时间待解析'}</p>{post.thumbnails?.length>0&&<div className="grid grid-cols-3 gap-1 max-w-[330px]">{post.thumbnails.slice(0,9).map((src:string,index:number)=><img key={index} src={src} className="aspect-square w-full object-cover rounded-sm" alt="朋友圈图片" loading="lazy"/>)}</div>}{post.image_count>(post.thumbnails?.length||0)&&<p className="text-xs text-muted-foreground">{post.media_status?.includes('encrypted')?'本地图片已缓存但尚未解密，请点击上方“恢复图片读取”。':`另有 ${post.image_count-(post.thumbnails?.length||0)} 张图片未预览，可先恢复图片读取；本地未缓存的内容需在微信打开后刷新。`}</p>}<p className="text-[13px] whitespace-pre-wrap break-words [overflow-wrap:anywhere] line-clamp-4"><WeChatText text={post.text||post.title||(post.status==='unsupported'?'本条缓存结构暂未解析':'图片或视频动态')}/></p></div>)}</div>}
         </>}
       </>}
     </>}

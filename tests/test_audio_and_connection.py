@@ -16,6 +16,7 @@ from core.data import Archive
 from core.exporting import export_session
 from core.media_codec import MediaCodec, silk_stream
 from core.service import Service
+from core.version import TUTORIAL_REVISION
 from tests.test_core import fixture,SESSION
 from tests.test_resources import ASSETS,media_fixture
 
@@ -95,7 +96,7 @@ class AudioTests(unittest.TestCase):
                 forward=dict(original,server_id='forward',kind='chatrecord',forward={'title':'Synthetic forward','messages':[dict(voice,server_id='nested-voice')]})
                 for bad in (False,True):
                     folder=self.root/('bad' if bad else 'good');folder.mkdir()
-                    with patch.object(archive,'messages',side_effect=lambda *a,**k:iter([voice] if bad else [voice,forward])),patch.object(archive.data,'voice_blob',return_value=b'\x02#!SILK_V3\xff\x7f' if bad else silk_fixture()):
+                    with patch.object(archive,'messages',side_effect=lambda *a,**k:iter([voice] if bad else [voice,forward])),patch.object(archive.data,'voice_blobs',side_effect=lambda *a:iter([b'\x02#!SILK_V3\xff\x7f' if bad else silk_fixture()])):
                         result=export_session(archive,archive.sessions()[0],{'format':'json','includeAvatars':False},folder,ASSETS,lambda _:None,lambda:None)
                     rows=json.loads(Path(result['path']).read_text(encoding='utf-8'))['messages']
                     if bad:
@@ -118,7 +119,7 @@ class ConnectionTests(unittest.TestCase):
     def setUp(self):
         self.temporary=tempfile.TemporaryDirectory();self.root=Path(self.temporary.name)
         self.addCleanup(self.temporary.cleanup)
-        state=self.root/'state';state.mkdir();(state/'config.json').write_text(json.dumps({'app_onboarding_seen':True}),encoding='utf-8')
+        state=self.root/'state';state.mkdir();(state/'config.json').write_text(json.dumps({'tutorials_seen':{'app':TUTORIAL_REVISION}}),encoding='utf-8')
         self.service=Service(ASSETS,state)
         self.addCleanup(self.service.shutdown)
         self.account=dict(path=str(self.root/'account'),db_storage=str(self.root/'account/db_storage'),dir_name='wxid_fixture',wxid='wxid_fixture')

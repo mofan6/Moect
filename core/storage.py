@@ -9,6 +9,11 @@ from pathlib import Path
 from .paths import is_link
 
 MANAGED = ('archives', 'media-cache', 'avatar-cache', 'previews')
+LIMITS_GB = (1, 3, 5, 10, 20, 0)
+
+
+def valid_limit(value):
+    return type(value) is int and value in LIMITS_GB
 
 
 def files_below(root, cancel=lambda: None):
@@ -45,18 +50,19 @@ def managed_root(service, root):
     raise ValueError('该目录不是此软件管理的缓存目录。')
 
 
-def storage_info(service):
+def storage_info(service, cancel=lambda: None):
     roots = [service.storage_root, *map(Path, service.config.get('storage_history', []))]
     seen = set()
     result = []
     for candidate in roots:
+        cancel()
         root = candidate.resolve()
         if root in seen:
             continue
         seen.add(root)
         try:
             managed_root(service, root)
-            categories = {name: sum(p.stat().st_size for p in files_below(root/name)) for name in MANAGED}
+            categories = {name: sum(p.stat().st_size for p in files_below(root/name, cancel)) for name in MANAGED}
         except (OSError, ValueError):
             continue
         result.append({'path': str(root), 'current': root == service.storage_root.resolve(),
@@ -165,17 +171,21 @@ def migrate(service, parent, job):
                 shutil.rmtree(target)
 
 
-def cleanup(service, job):
+def cleanup(service, job, limit_bytes=None, total_bytes=None):
     check = lambda: service._check(job)
+    if limit_bytes is not None and total_bytes is None:
+        total_bytes = storage_info(service, check)['bytes']
     protected = [Path(service.config['export_dir']).resolve()]
     for library in (service.library, service.config.get('library'), service._demo_previous):
-        for field in ('root', 'assets_root'):
+        for field in ('root', 'assets_root', 'account_dir'):
             if library and library.get(field):
                 protected.append(Path(library[field]).resolve())
     protected.extend(Path(task['folder']).resolve() for task in service.config['tasks'] if task.get('folder'))
     roots = {service.storage_root.resolve(), *[Path(p).resolve() for p in service.config.get('storage_history', [])]}
     freed = 0
+    candidates = []
     for candidate in roots:
+        check()
         try:
             root = managed_root(service, candidate)
         except (OSError, ValueError):
@@ -185,22 +195,61 @@ def cleanup(service, job):
             for path in account.glob('*'):
                 if re.fullmatch(r'(?:snapshot|assets)_[0-9a-f]{12}', path.name):
                     targets.append(path)
-        targets.extend((root/'media-cache').glob('*/downloads'))
-        targets.append(root/'previews')
+        caches = [*(root/'media-cache').glob('*/downloads'), root/'previews']
+        if limit_bytes is not None:
+            # Regenerable entries are separate units, so a cap need not remove
+            # newer downloads/previews along with one old item. Keys stay put.
+            caches.extend([root/'avatar-cache', *(root/'archives').glob('*/avatar-cache')])
+            for cache in caches:
+                if not cache.exists():
+                    continue
+                if is_link(cache):
+                    raise ValueError('清理目录边界校验失败。')
+                if cache.is_dir():
+                    targets.extend(cache.iterdir())
+        else:
+            targets.extend(caches)
         for target in targets:
             check()
-            if not target.is_dir():
+            if not target.exists():
                 continue
             resolved = target.resolve()
             if not resolved.is_relative_to(root) or resolved == root or is_link(target):
                 raise ValueError('清理目录边界校验失败。')
             if any(resolved == p or resolved.is_relative_to(p) or p.is_relative_to(resolved) for p in protected):
                 continue
-            size = sum(path.stat().st_size for path in files_below(target, check))
+            if target.is_dir():
+                size = 0;modified = target.stat().st_mtime_ns
+                for path in files_below(target, check):
+                    stat = path.stat();size += stat.st_size
+                    modified = max(modified, stat.st_mtime_ns)
+            elif target.is_file():
+                stat = target.stat();size = stat.st_size;modified = stat.st_mtime_ns
+            else:
+                continue
+            candidates.append((modified, str(resolved), root, size))
+    for _, name, root, size in sorted(candidates):
+        check()
+        if limit_bytes is not None and total_bytes-freed <= limit_bytes:
+            break
+        target = Path(name)
+        # Revalidate immediately before deleting; never follow reparse points.
+        managed_root(service, root)
+        if is_link(target) or target.resolve()!=target or not target.is_relative_to(root) or target==root:
+            raise ValueError('清理目录边界校验失败。')
+        if target.is_dir():
+            for _ in files_below(target, check):
+                pass
+            check()
             shutil.rmtree(target)
-            freed += size
-            service._update(job, detail='正在清理过期缓存…')
-    service._update(job, detail='清理完成，释放 %.1f MB。' % (freed/1024**2), freed_bytes=freed)
+        else:
+            target.unlink()
+        freed += size
+        service._update(job, detail='正在清理过期缓存…')
+    detail = '清理完成，释放 %.1f MB。' % (freed/1024**2)
+    if limit_bytes is not None and total_bytes-freed > limit_bytes:
+        detail += ' 当前快照或保留文件仍超过上限，已保留，未强制删除。'
+    service._update(job, detail=detail, freed_bytes=freed)
 
 
 def source_database_bytes(library):

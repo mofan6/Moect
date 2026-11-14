@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 
 let queue: Promise<any> = Promise.resolve();
 
-export function LocalMediaPreview({ hint }: { hint: any }) {
+export function LocalMediaPreview({ hint, onRefresh, refreshing=false }: { hint: any;onRefresh?:()=>Promise<boolean|void>;refreshing?:boolean }) {
   const holder = useRef<HTMLDivElement>(null),
     dialog = useRef<HTMLDialogElement>(null);
   const [result, setResult] = useState<any>(null),
@@ -126,7 +126,14 @@ export function LocalMediaPreview({ hint }: { hint: any }) {
           variant="ghost"
           size="sm"
           className="mt-1 text-xs"
-          onClick={() => setAttempt((value) => value + 1)}
+          disabled={refreshing}
+          onClick={async()=>{
+            if(hint.kind==='voice'&&onRefresh){
+              const pending=await onRefresh()
+              if(pending)return
+            }
+            setAttempt((value)=>value+1)
+          }}
         >
           重试读取
         </Button>

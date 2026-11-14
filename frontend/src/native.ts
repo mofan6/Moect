@@ -16,10 +16,30 @@ export const ready=new Promise<void>(resolve=>{
     });document.head.append(script)
   }
 })
-export async function call(action:string,payload:any={}){
- await ready
+// Limit requests before pywebview creates a native thread for each invocation.
+// Two avatar slots leave capacity for state, messages and window interactions.
+const calls:{action:string;run:()=>Promise<any>;resolve:(value:any)=>void;reject:(error:any)=>void}[]=[]
+let activeCalls=0,activeAvatars=0
+function drain(){
+ while(activeCalls<6){
+  const index=calls.findIndex(item=>item.action!=='avatar'||activeAvatars<2)
+  if(index<0)return
+  const item=calls.splice(index,1)[0],avatar=item.action==='avatar'
+  activeCalls++;if(avatar)activeAvatars++
+  Promise.resolve().then(item.run).then(item.resolve,item.reject).finally(()=>{activeCalls--;if(avatar)activeAvatars--;drain()})
+ }
+}
+async function invoke(action:string,payload:any){
  if(bridge.invoke){const data=await bridge.invoke(action,payload);if(data.error)throw new Error(data.error);return data.result}
  return new Promise<any>((resolve,reject)=>{const id=String(++sequence);pending.set(id,{resolve,reject});bridge.request(JSON.stringify({id,action,payload}))})
+}
+export async function call(action:string,payload:any={}){
+ await ready
+ return new Promise<any>((resolve,reject)=>{
+  const item={action,run:()=>invoke(action,payload),resolve,reject}
+  if(action.startsWith('window_'))calls.unshift(item);else calls.push(item)
+  drain()
+ })
 }
 export async function nativeFetch(_url:string,options:any):Promise<any>{
   const payload=JSON.parse(options.body)
