@@ -18,6 +18,7 @@ import hashlib
 import os
 import re
 import sqlite3
+import threading
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from datetime import datetime
@@ -27,9 +28,21 @@ from .game_emojis import describe_game
 
 try:
     import zstandard as zstd
-    _ZSTD = zstd.ZstdDecompressor()
 except ImportError:                                     # pragma: no cover
-    _ZSTD = None
+    zstd = None
+
+# zstandard 的解压器实例内部持有一个 ZSTD_DCtx，官方文档明确说明实例不是
+# 线程安全的；批量导出会开 2-4 个 worker 并发解压，因此每个线程各建一个。
+_ZSTD_LOCAL = threading.local()
+
+
+def zstd_decompressor():
+    if zstd is None:
+        return None
+    decoder = getattr(_ZSTD_LOCAL, "decoder", None)
+    if decoder is None:
+        decoder = _ZSTD_LOCAL.decoder = zstd.ZstdDecompressor()
+    return decoder
 
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
@@ -176,10 +189,11 @@ def to_text(value) -> str:
     if isinstance(value, (bytes, bytearray)):
         b = bytes(value)
         if b[:4] == ZSTD_MAGIC:
-            if _ZSTD is None:
+            decoder = zstd_decompressor()
+            if decoder is None:
                 return ""
             try:
-                return _ZSTD.decompress(b, max_output_size=4 * 1024 * 1024).decode(
+                return decoder.decompress(b, max_output_size=4 * 1024 * 1024).decode(
                     "utf-8", "ignore")
             except Exception:                            # noqa: BLE001
                 return ""
